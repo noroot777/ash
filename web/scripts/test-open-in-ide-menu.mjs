@@ -121,7 +121,7 @@ try {
   const geometry = await page.evaluate(() => {
     const panel = document.querySelector("[data-testid=narrow-panel]");
     const bar = panel.querySelector(".file-viewer__bar");
-    const close = panel.querySelector('[aria-label="关闭文件夹，回到会话"]');
+    const close = panel.querySelector('[aria-label="关闭文件夹详情"]');
     const title = panel.querySelector(".file-viewer__title b");
     const box = panel.getBoundingClientRect();
     return {
@@ -146,7 +146,7 @@ try {
   );
 
   // 真能点到才算数。
-  await page.locator('[data-testid=narrow-panel] [aria-label="关闭文件夹，回到会话"]').click();
+  await page.locator('[data-testid=narrow-panel] [aria-label="关闭文件夹详情"]').click();
   await page.waitForFunction(() => !document.querySelector("[data-testid=narrow-panel] .file-viewer__bar"));
 
   console.log("✓ open-in-ide 菜单：launching 不说「已打开」、探测卡住有出路、420px 下标题与关闭都点得到");

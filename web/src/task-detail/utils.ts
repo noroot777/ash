@@ -1,4 +1,5 @@
 import type { Task } from "@navi/shared";
+import { instanceUploadName } from "../lib/resourceRoots.ts";
 
 export function formatInstant(value?: string | null): string {
   if (!value) return "";
@@ -115,10 +116,17 @@ export function isAudioPath(path: string): boolean {
 // 免得所有调用点跟着改 import。
 export { parseAttachmentText } from "@navi/shared/attachments";
 
+// 本实例的附件按真实 uploads 目录认（resourceRoots.ts）。`data/uploads/` 是改认真实根之前就有
+// 的老口径，留着给**别的根**下的历史附件：mac 版导入、仓库搬家都不改写消息里的旧路径，而
+// `/api/uploads/:file` 按文件名取，同名文件在本机照样取得到。只认绝对路径：相对路径属于引用
+// 它的那份文档（报告里的 `data/uploads/x.png` 是证据目录里那一张）。
+const LEGACY_UPLOAD = /^(?:[A-Za-z]:)?(?:\/.*)?\/data\/uploads\/([^/]+)$/;
+
+/** `path` 是磁盘路径（不是 URL）：附件记录、agent 图副本存的都是它。 */
 export function attachmentView(path: string): { name: string; url: string | null; image: boolean } {
   const normalized = path.trim().replaceAll("\\", "/");
   const name = normalized.split("/").filter(Boolean).pop() ?? normalized;
-  const uploaded = /(?:^|\/)data\/uploads\/([^/]+)$/.exec(normalized)?.[1] ?? null;
+  const uploaded = instanceUploadName(normalized) ?? LEGACY_UPLOAD.exec(normalized)?.[1] ?? null;
   const url = uploaded ? `/api/uploads/${encodeURIComponent(uploaded)}` : null;
   const displayName = name.replace(/^[A-Za-z0-9_-]{12}-/, "") || name;
   return { name: displayName, url, image: !!url && isImagePath(uploaded ?? "") };

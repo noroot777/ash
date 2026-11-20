@@ -9,6 +9,8 @@ import { endedMonitorIds } from "../monitors/monitorTray.ts";
 import { useTaskMemoTab } from "../task-memos/useTaskMemoTab.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { TASK_INSPECTORS } from "./taskInspectors.tsx";
+import { FILE_VIEW_TAB } from "../files/fileViewTab.tsx";
+import { PREVIEW_TAB } from "../preview-workspace/previewTab.tsx";
 import type { useConversation } from "../lib/useConversation.ts";
 import { latestRunFacts } from "./info/infoRunFacts.ts";
 import { surfaceTabWhenUsed } from "../inspector/index.ts";
@@ -104,8 +106,9 @@ export function useTaskInspectorStack(
     // 停在这几格上时**不要**被自动切走。判据是「用户主动打开它在干活」：侧聊在跟人对话，
     // 备忘可能正编辑着一条几百字的。stateKey 含 status，任务一跑完就换挡，于是「写到一半
     // 任务结束了，右边自己跳回信息」—— 草稿本身已经挪进 taskMemoDrafts.ts 不会丢，但人
-    // 被甩走一次仍然是错的（独立审查第 2 轮 F1）。
-    preserveActiveTabIds: ["side-chat", "memos"],
+    // 被甩走一次仍然是错的（独立审查第 2 轮 F1）。「查看」同理：人正读着一份文件；「预览指正」
+    // 那一格里摊着页面和没发出去的圈注，切走就把页面整个卸掉了。
+    preserveActiveTabIds: ["side-chat", "memos", FILE_VIEW_TAB, PREVIEW_TAB],
     // 顺序由 TASK_INSPECTORS 定，这里只说「默认哪几格开着」。
     //
     // 新增一格只加进这张表是不够的：存量用户的 `openTabs` 躺在 localStorage 里，

@@ -125,9 +125,10 @@ try {
   await supersededBody.waitFor();
   assert.equal(await supersededBody.locator(".task-message--agent.is-reviewer").count(), 1, "被盖过的那一轮的发言还找得回来");
   await supersededBody.getByRole("button", { name: "审查报告" }).click();
-  const supersededReport = page.getByRole("dialog", { name: /report\.md/ });
+  const supersededReport = page.getByRole("complementary", { name: "审查报告：第 3 轮验证" });
   await supersededReport.getByText(/第 3 轮审查报告/).waitFor();
   await supersededReport.getByRole("button", { name: "关闭审查报告" }).click();
+  await supersededReport.waitFor({ state: "detached" });
   await supersededVerify.click();
   assert.equal(await secondLog.locator(".turn-receipt-lane").count(), 0, "再点一下收起");
   // 启动失败那一次不能占用后来重跑生成的报告。
@@ -160,16 +161,18 @@ try {
   assert.deepEqual(spread, { left: 0, wider: true, below: true }, "摊开的那一块在气泡下面、占满正文宽度，左缘跟回合正文对齐");
   assert.equal(await body.getByRole("button", { name: "审查报告" }).count(), 0, "报告键在气泡那一行里，摊开的经过里不再出一颗");
 
-  // 报告键在指到才出的那一行里，键盘走得到；沿用现有应用内 Markdown 弹层，不另开标签页。
+  // 报告键在指到才出的那一行里，键盘走得到；从左边推出读全文那一屉，不盖住会话、不另开标签页。
   const pageCount = page.context().pages().length;
   const reportKey = head.getByRole("button", { name: "审查报告" });
   await reportKey.focus();
   await page.keyboard.press("Enter");
-  const reportDialog = page.getByRole("dialog", { name: /report\.md/ });
-  await reportDialog.waitFor();
-  await reportDialog.getByText(/第 2 轮审查报告/).waitFor();
+  const reportDrawer = page.getByRole("complementary", { name: "审查报告：第 2 轮验证" });
+  await reportDrawer.getByText(/第 2 轮审查报告/).waitFor();
   assert.equal(page.context().pages().length, pageCount);
-  await reportDialog.getByRole("button", { name: "关闭审查报告" }).click();
+  assert.equal(await page.locator('[role="dialog"][aria-modal="true"]').count(), 0, "报告不再是盖住整页的模态层");
+  assert.equal(await reportKey.getAttribute("aria-pressed"), "true", "开着的那一屉，报告键是按下的");
+  await reportDrawer.getByRole("button", { name: "关闭审查报告" }).click();
+  await reportDrawer.waitFor({ state: "detached" });
 
   // 自由派审走另一条带 runId 的路由；启动失败那一次不占用后来重跑生成的报告。
   await bubbles.nth(1).locator("button.review-verdict-text").click();
@@ -177,9 +180,10 @@ try {
   assert.equal(await freeBody.locator(".task-message--agent.is-reviewer").count(), 1, "自由派审的正文归它自己那一轮");
   await bubbles.nth(1).locator(".review-verdict-bubble").hover();
   await bubbles.nth(1).locator(".review-verdict-bubble > header").getByRole("button", { name: "审查报告" }).click();
-  const freeDialog = page.getByRole("dialog", { name: /report\.md/ });
-  await freeDialog.getByText(/自由派审报告 fr1 第 1 轮/).waitFor();
-  await freeDialog.getByRole("button", { name: "关闭审查报告" }).click();
+  const freeDrawer = page.locator("aside.side-drawer--reading");
+  await freeDrawer.getByText(/自由派审报告 fr1 第 1 轮/).waitFor();
+  await freeDrawer.getByRole("button", { name: "关闭审查报告" }).click();
+  await freeDrawer.waitFor({ state: "detached" });
   await bubbles.nth(1).locator("button.review-verdict-text").click();
   await part.click();
   assert.equal(await first.locator(":scope > .turn-footnote-lane").count(), 0, "再点一下收起");

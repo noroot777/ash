@@ -85,6 +85,8 @@ export type SelectProps<V extends string = string> = {
   clearLabel?: string;
   /** 每次展开时调一次：候选随时在变、只在要看时才去取的场景（例：前置候选此刻到哪一步了）。 */
   onOpen?: () => void;
+  /** 候选列表底下的一个动作，点了浮层不关（例：刷新远端分支，刷新完候选就地换新）。 */
+  footerAction?: { label: string; onClick: () => void; disabled?: boolean };
 };
 
 /** 退场动画的时长（和 select.css 里 `.is-leaving` 那一段同一个数）。 */
@@ -116,6 +118,7 @@ export function Select<V extends string = string>({
   onClear,
   clearLabel = "清空",
   onOpen,
+  footerAction,
 }: SelectProps<V>) {
   const [open, setOpen] = useState(false);
   // 关掉之后还要留 120ms 放完退场：mounted 管「在不在 DOM 里」，open 管「是不是开着」。
@@ -392,6 +395,11 @@ export function Select<V extends string = string>({
               );
             })}
           </div>
+          {footerAction && (
+            <button type="button" className="ui-dropdown-clear" disabled={footerAction.disabled} onClick={footerAction.onClick}>
+              {footerAction.label}
+            </button>
+          )}
           {onClear && (
             <button
               type="button"

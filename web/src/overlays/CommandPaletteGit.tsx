@@ -1,8 +1,10 @@
 import { openGitWorkbench } from "../git-workbench/navigation.ts";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ProjectView } from "@navi/shared";
-import { Check, GitBranch, GitCommit, TreeStructure } from "@phosphor-icons/react";
-import type { GitOverview } from "../lib/api.ts";
+import { ArrowsClockwise, Check, GitBranch, GitCommit, TreeStructure } from "@phosphor-icons/react";
+import { api, type GitOverview } from "../lib/api.ts";
+import { readProjectGitRun } from "../workspace/projectGitRuns.ts";
+import { useProjectGit } from "../workspace/useProjectGit.ts";
 
 export function GitProjectStep({
   projects,
@@ -37,30 +39,76 @@ export function GitProjectStep({
   );
 }
 
-function Section({ title, count, children }: { title: string; count: number; children: ReactNode }) {
+/** 重读一个项目的概览并换上去；返回这趟是不是最新那趟（不是就没换），读失败抛错。 */
+export type GitOverviewReload = (projectId: string) => Promise<boolean>;
+
+function Section({ title, count, action, children }: { title: string; count: number; action?: ReactNode; children: ReactNode }) {
   return (
     <section className="min-h-0 min-w-0 overflow-y-auto">
       <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
         <h3 className="text-[length:var(--t-xs)] font-medium uppercase tracking-[0.08em] text-faint">{title}</h3>
         <span className="rounded-full bg-overlay px-1.5 py-0.5 text-[length:var(--t-xs)] tabular-nums text-muted">{count}</span>
+        {action}
       </div>
       <div className="p-2">{children}</div>
     </section>
   );
 }
 
+/**
+ * 远端分支那一栏的刷新：只为了看到协作者刚推上去的分支（新建任务要从它开工）。走侧栏分支胶囊同一本账
+ * （fetch --prune），不是另一套操作；成了就在原地换上新的概览。
+ */
+function RemoteRefresh({ projectId, reload }: { projectId: string; reload: GitOverviewReload }) {
+  const git = useProjectGit(projectId, false);
+  const [error, setError] = useState<string | null>(null);
+  const [rereading, setRereading] = useState(false);
+  const current = useRef(projectId);
+  useEffect(() => { current.current = projectId; setError(null); }, [projectId]);
+  // 拉取加重读算一趟：重读完才收起「正在刷新」。结果认不认由 reload 按代次定（CommandPalette.tsx）。
+  const refresh = async () => {
+    setRereading(true);
+    try {
+      const ok = await git.run("fetch", () => api.projectGitFetch(projectId));
+      if (current.current !== projectId) return;
+      if (!ok) { setError(readProjectGitRun(projectId).error ?? "刷新远端分支失败"); return; }
+      const latest = await reload(projectId).catch((reason: unknown) => {
+        if (current.current === projectId) setError(`远端已经拉到，但重读失败：${reason instanceof Error ? reason.message : String(reason)}`);
+        return false;
+      });
+      if (latest && current.current === projectId) setError(null);
+    } finally {
+      setRereading(false);
+    }
+  };
+  const fetching = git.busy === "fetch" || rereading;
+  return (
+    <span className="ml-auto flex min-w-0 items-center gap-2">
+      {error && <span className="min-w-0 truncate text-[length:var(--t-xs)] text-red">{error}</span>}
+      <button type="button" className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--t-xs)] text-muted hover:bg-overlay hover:text-ink disabled:opacity-60"
+        disabled={fetching} onClick={() => { void refresh(); }}>
+        <ArrowsClockwise size={11} />
+        {fetching ? "正在刷新…" : "刷新"}
+      </button>
+    </span>
+  );
+}
+
 // `/git` 这一屏**只读**（用户 2026-08-21 指定）：切分支 / 更新 / 拉取 / 推送只有一个入口，
-// 就是侧栏项目名底下那颗分支胶囊。命令面板是「查一眼」的地方，不在这儿开第二个操作面。
+// 就是侧栏项目名底下那颗分支胶囊。命令面板是「查一眼」的地方，不在这儿开第二个操作面 ——
+// 唯一的例外是远端分支那一栏的「刷新」（RemoteRefresh），它只为了把清单读新。
 export function GitOverviewPanel({
   project,
   overview,
   loading,
   error,
+  reload,
 }: {
   project: ProjectView | undefined;
   overview: GitOverview | null;
   loading: boolean;
   error: string | null;
+  reload: GitOverviewReload;
 }) {
   if (loading) return <p className="palette-empty">正在读取仓库状态…</p>;
   if (error) return <p className="palette-empty text-red">{error}</p>;
@@ -68,6 +116,7 @@ export function GitOverviewPanel({
 
   return (
     <div className="grid h-[min(58vh,520px)] min-h-[320px] grid-cols-[38%_62%] divide-x divide-line">
+      <div className="flex min-h-0 min-w-0 flex-col divide-y divide-line">
       <Section title="本地分支" count={overview.branches.length}>
         <div className="space-y-0.5">
           {overview.branches.map((branch) => {
@@ -83,6 +132,20 @@ export function GitOverviewPanel({
           {!overview.branches.length && <p className="px-2.5 py-6 text-center text-xs text-faint">未发现本地分支</p>}
         </div>
       </Section>
+      {(overview.remotes?.length > 0 || overview.remoteBranches?.length > 0) && (
+        <Section title="远端分支" count={overview.remoteBranches?.length ?? 0}
+          action={project && overview.remotes?.length > 0 ? <RemoteRefresh projectId={project.id} reload={reload} /> : undefined}>
+          <div className="space-y-0.5">
+            {(overview.remoteBranches ?? []).map((branch) => (
+              <button type="button" onClick={() => { if (project) openGitWorkbench({ projectId: project.id, view: "branches", ref: branch.ref }); }} key={branch.ref} className="flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2">
+                <GitBranch size={13} className="shrink-0 text-faint" />
+                <span className="min-w-0 truncate font-mono text-xs text-muted">{branch.ref}</span>
+              </button>
+            ))}
+          </div>
+        </Section>
+      )}
+      </div>
 
       <Section title="Worktrees" count={overview.worktrees.length}>
         <div className="space-y-1.5">

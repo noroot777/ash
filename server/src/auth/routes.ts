@@ -2,7 +2,7 @@
 // 前端要先问「现在是什么模式、我登没登」才知道该渲染哪一屏。
 import type { Context, Hono } from "hono";
 import { deleteCookie, setCookie } from "hono/cookie";
-import type { AuthState, InviteInfo, UserRole } from "@navi/shared";
+import type { AuthState, InviteInfo, ResourceRoots, UserRole } from "@navi/shared";
 import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@navi/shared/multiuser";
 import { hostname } from "node:os";
 import { actorOf, authErrorResponse, isAccountHolder, requireAdmin } from "./context.js";
@@ -35,6 +35,7 @@ import {
 } from "./store.js";
 import { LOCAL_ONLY, LOCAL_ONLY_REFUSAL } from "../local-only.js";
 import { needsOnboarding } from "../onboarding.js";
+import { RUNS_DIR, RUNS_FALLBACK_DIR, UPLOADS_DIR } from "../paths.js";
 import { connectionOf, deviceByToken, enrollDevice, peerAddress, remoteKeyMatches, removeDevice } from "./remote-access.js";
 import { mountRemoteAccessRoutes } from "./remote-access-routes.js";
 import { deviceName } from "./remote-pairing.js";
@@ -57,6 +58,11 @@ function issueSessionCookie(c: Context, token: string): void {
   });
 }
 
+const RESOURCE_ROOTS: ResourceRoots = {
+  uploads: UPLOADS_DIR,
+  runs: RUNS_FALLBACK_DIR ? [RUNS_DIR, RUNS_FALLBACK_DIR] : [RUNS_DIR],
+};
+
 async function stateFor(c: Context): Promise<AuthState> {
   const config = await instanceConfig();
   const actor = actorOf(c);
@@ -73,6 +79,7 @@ async function stateFor(c: Context): Promise<AuthState> {
       homeDir: null,
       needsOnboarding: locked ? false : await needsOnboarding(actor),
       localOnly: LOCAL_ONLY,
+      resourceRoots: locked ? null : RESOURCE_ROOTS,
     };
   }
   const user = actor.kind === "user" && actor.userId ? await getUser(actor.userId) : null;
@@ -89,6 +96,7 @@ async function stateFor(c: Context): Promise<AuthState> {
     // 没登录就答不上「我还缺什么」,也不该答:那一屏是登录页。
     needsOnboarding: user ? await needsOnboarding(actor) : false,
     localOnly: LOCAL_ONLY,
+    resourceRoots: user ? RESOURCE_ROOTS : null,
   };
 }
 

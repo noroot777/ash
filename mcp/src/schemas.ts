@@ -70,7 +70,7 @@ export const taskShape = z.object({
   model: z.string().nullable().optional().describe("覆盖执行器 profile 的模型；缺省/null=跟随执行器"),
   reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省/null=跟随执行器"),
   useWorktree: z.boolean().optional().describe("是否在独立 worktree 中运行；缺省跟随全局默认，非 git 项目始终为 false"),
-  worktreeBase: z.string().nullable().optional().describe("开工起点；可选父任务分支，服务端冻结该提交并记录验收依赖"),
+  worktreeBase: z.string().nullable().optional().describe("开工起点：本地分支、远端分支（如 origin/foo）、tag 或提交；可选父任务分支，服务端冻结该提交并记录验收依赖。远端分支建任务前先 fetch，没给合入分支时合进本地同名分支（本地没有就建跟踪分支）。解析不出提交直接报错"),
   mergeTargetBranch: z.string().nullable().optional().describe("最终合入分支；派生任务默认继承父任务的最终目标，独立于开工起点"),
   workflowMode: WORKFLOW_MODE.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),

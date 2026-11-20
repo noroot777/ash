@@ -2,8 +2,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { SideDrawer } from "./SideDrawer.tsx";
 
 /**
- * 读全文的那一屉：审查报告、辩论的完整记录。从左边推出来，只盖住中间那一栏——跟子智能体、
- * 团队执行者详情同一个位置（SideDrawer），右边的审查格照样看得见、点得着。
+ * 读全文的那一屉：审查报告、辩论的完整记录。从左边推出来——跟子智能体、团队执行者详情同一个
+ * 位置（SideDrawer），右边的审查格照样看得见、点得着；不盖会话，中间那一栏把它让出来（够宽并排、窄了上下摆，side-drawer.css），
+ * 读着报告也能接着在回复框里说话。
  *
  * 宿主是视图的主区容器（TaskDetail / TeamView），开它的人散在各处：会话里的气泡、Inspector 里
  * 的审查格。所以这里只是一个按视图共享的「槽」：谁 `open` 谁占住它，前一个让位；宿主自己的

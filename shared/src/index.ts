@@ -93,6 +93,7 @@ export type {
   RemoteAccessView,
   RemoteDeviceVia,
   RemoteDeviceView,
+  ResourceRoots,
   UserHandoffTarget,
   UserRole,
   UserStatus,
@@ -342,7 +343,8 @@ export interface Task {
   liveSince?: string | null;
   archived?: boolean;
   archivedAt?: string | null;
-  // §4 per-task worktree opt-in; worktreeBase null means current HEAD.
+  // §4 per-task worktree opt-in; worktreeBase null means current HEAD. A remote branch
+  // (`origin/foo`) is fetched at creation and merges into local `foo` (created to track it if missing).
   // Existing worktrees are reused. Cleanup happens on accept, on archive (per the
   // `archiveClean` setting), on handoff, or when the user deletes the task —
   // never as a side effect of anything else; see server/src/workspace-cleanup.ts.

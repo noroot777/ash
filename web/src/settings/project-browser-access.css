@@ -40,7 +40,7 @@
   padding: 8px 10px;
   font-family: var(--font-mono, ui-monospace, Consolas, monospace);
   font-size: var(--t-sm);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 /* 「将保存为」「当前已授权」里是一串域名,合法域名可以长到 253 字符且不含空格,
    不给断行规则就会整条撑出卡片、被 .settings-card 的 overflow:hidden 裁掉 ——

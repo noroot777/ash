@@ -263,7 +263,19 @@ try {
   }
   {
     const repo = await repository("stale");
-    const task = await create("stale", { worktreeBase: "gone-branch" });
+    // 显式指定却解析不出提交的起点：建任务当场拒，不再建出来、等起跑时悄悄换成项目当前分支。
+    const rejected = await api.request("/tasks", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId: "stale", title: "typo", useWorktree: true, workflowMode: "free", worktreeBase: "gone-branch" }) });
+    assert.equal(rejected.status, 400);
+    assert.match((await rejected.json()).error, /开工起点 gone-branch 不存在/);
+    assert.equal((await db.select().from(tasks).where(eq(tasks.projectId, "stale"))).length, 0, "rejected base creates no task");
+    // 起跑时的降级只剩没冻结过起点的老任务会走到：直接落一行这样的老任务。
+    const legacy = async (id: string, extra: Record<string, unknown> = {}) => {
+      await db.insert(tasks).values({ id, projectId: "stale", title: id, body: "", status: "idle", useWorktree: true,
+        workflowMode: "free", createdAt: at, updatedAt: at, ...extra });
+      return row(id);
+    };
+    const task = await legacy("stale-legacy", { worktreeBase: "gone-branch" });
     const ws = await taskWorkspace(task, repo);
     assert.equal(ws.baseFallback?.requested, "gone-branch");
     assert.equal(ws.baseFallback?.persisted, true);
@@ -271,12 +283,12 @@ try {
     commit(ws.path, "fallback.txt");
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, task.id));
     assert.equal((await acceptTask(task.id)).accepted, true);
-    const explicit = await create("stale", { worktreeBase: "gone-again", mergeTargetBranch: "refs/heads/main" });
+    const explicit = await legacy("stale-explicit", { worktreeBase: "gone-again", mergeTargetBranch: "refs/heads/main" });
     const explicitWs = await taskWorkspace(explicit, repo);
     commit(explicitWs.path, "explicit-target.txt");
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, explicit.id));
     assert.equal((await acceptTask(explicit.id)).accepted, true, "lazy starts still normalize explicit refs/heads targets");
-    console.log("✓ stale base keeps the existing runtime fallback and can be accepted");
+    console.log("✓ unresolvable explicit base is rejected at creation; legacy unpinned tasks keep the runtime fallback and can be accepted");
   }
   {
     // repoPath 是带 `~` 存进库的（normalizeRepoPathForStorage 有意保留），验收链路上每个

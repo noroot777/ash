@@ -117,7 +117,7 @@
 .chat-composer { border: 1px solid var(--chat-line2); border-radius: 10px; box-shadow: 0 2px 9px #382a4006; position: relative; transition: box-shadow 180ms ease, border-color 180ms ease; }
 /* 输入框铺满整张卡，焦点提示由卡片自己的 focus-within 承担。 */
 .chat-composer:focus-within { border-color: var(--focus-soft); box-shadow: 0 0 0 3px color-mix(in oklab, var(--focus-ring) 10%, transparent); }
-.chat-composer textarea { display: block; width: 100%; resize: none; min-height: 74px; max-height: 190px; background: none; border: 0; padding: 14px 15px 8px; color: var(--chat-ink); font: inherit; font-size: 13px; line-height: 1.7; border-radius: 10px; outline: none; }
+.chat-composer textarea { display: block; width: 100%; resize: none; min-height: 74px; max-height: 190px; background: none; border: 0; padding: 14px 15px 8px; color: var(--chat-ink); font: inherit; font-size: 13px; line-height: 1.5; border-radius: 10px; outline: none; }
 .chat-composer textarea::placeholder { color: var(--chat-faint); }
 .chat-composer footer { display: flex; align-items: center; gap: 9px; padding: 8px 11px; }
 .chat-composer footer > button { background: none; border: 0; color: var(--chat-faint); padding: 3px; display: flex; border-radius: 5px; }
