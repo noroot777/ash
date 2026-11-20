@@ -11,6 +11,9 @@ import { motionReduced } from "../lib/useSwapText.ts";
  * 关闭动画得等 animationend 才真卸载，所以这里自己记一个 `closing`；
  * 减少动效时（`motionReduced()`，side-drawer.css 同一口径）动画被整个关掉、animationend 永远不来，那一路靠定时器收尾。
  *
+ * 读全文那一屉（reading）在够宽的主区里不盖会话：不画遮罩，把会话往右挤出抽屉那么宽（side-drawer.css），
+ * 一边读报告一边还能看会话、在回复框里说话。窄了才退回跟别的抽屉一样盖在上面。
+ *
  * 进 useDismissable 那一摞但**不**把「点外面」当关闭意图：scrim 只盖住中间那一栏，右边的
  * Inspector 仍然要能点（列表就在那儿，点下一个直接换人）。进这摞图的是 Esc 的层序——
  * 抽屉里还开着菜单时，Esc 先关菜单而不是把整个抽屉端走。
@@ -67,7 +70,7 @@ export function SideDrawer({
   }, []);
   return (
     <>
-      <div className={`side-drawer-scrim${closing ? " is-closing" : ""}`} onClick={requestClose} />
+      <div className={`side-drawer-scrim side-drawer-scrim--${variant}${closing ? " is-closing" : ""}`} onClick={requestClose} />
       <aside
         ref={drawerRef}
         className={`side-drawer side-drawer--${variant}${closing ? " is-closing" : ""}`}

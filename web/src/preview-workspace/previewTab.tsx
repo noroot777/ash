@@ -5,8 +5,8 @@ import { PreviewWorkspace } from "./PreviewWorkspace.tsx";
 
 // 右侧面板里「预览指正」那一格。打开之后整份预览指正（页面、标注工具、意见栏）就长在这一格里，
 // 而不是替换中间那一栏：边看页面边圈、边跟 agent 说话，会话和回复框得一直留着。打开着时它是宽格
-// （跟会话大约五五开、可拖，同「浏览器」那一格）、自带头带（关闭键在工作区自己的头带上）；没打开时
-// 是一格普通的空态，一颗键把它打开。「放大预览」才铺满整个窗口。
+// （跟会话大约五五开、可拖，同「浏览器」那一格）、自带头带（关闭键在工作区自己的头带上）、保活
+// （切格、收起面板不卸载）；没打开时是一格普通的空态，一颗键把它打开。「放大预览」才铺满整个窗口。
 
 export const PREVIEW_TAB = "preview";
 
@@ -27,12 +27,15 @@ export function PreviewPane({ taskId, preview }: { taskId: string; preview: Prev
   );
 }
 
-/** 打开着时把「预览指正」那一格换成宽格、自带头带；没打开就原样返回。 */
+/**
+ * 打开着时把「预览指正」那一格换成宽格、自带头带，并且保活：切去别的格、收起右侧面板都只是藏起来，
+ * 嵌着的页面、标注通道、页面里没提交的输入原样留着；只有关掉它或换任务才卸。没打开就原样返回。
+ */
 export function usePreviewTab<Context>(
   descriptors: readonly InspectorDescriptor<Context>[],
   open: boolean,
 ): readonly InspectorDescriptor<Context>[] {
   return useMemo(() => (open
-    ? descriptors.map((descriptor) => (descriptor.id === PREVIEW_TAB ? { ...descriptor, wide: true, bare: true } : descriptor))
+    ? descriptors.map((descriptor) => (descriptor.id === PREVIEW_TAB ? { ...descriptor, wide: true, bare: true, keepAlive: true } : descriptor))
     : descriptors), [descriptors, open]);
 }

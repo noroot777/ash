@@ -1,6 +1,8 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Browser, Info } from "@phosphor-icons/react";
+import { LeftDrawerProvider, useLeftDrawerHost } from "../../src/components/LeftDrawer.tsx";
+import { MarkdownBody } from "../../src/components/MarkdownBody.tsx";
 import { InspectorHost } from "../../src/inspector/InspectorHost.tsx";
 import type { InspectorDescriptor } from "../../src/inspector/index.ts";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
@@ -28,10 +30,14 @@ const DESCRIPTORS: readonly InspectorDescriptor<Context>[] = [
   },
 ];
 
+const REPORT = "证据：[第 1 轮报告](/Users/example/code/navi/data/runs/task-1/review/round-1/report.md)";
+
 // 复刻真实页面的外壳（同 file-view-zoom.tsx）：左边任务栏、中间会话 + 回复框、右边 inspector。
-// 「预览指正」那一格走真的接线：TaskDetail 用的就是这一份 PreviewPane + usePreviewTab。
+// 「预览指正」那一格走真的接线：TaskDetail 用的就是这一份 PreviewPane + usePreviewTab。中间那一栏
+// 照 TaskDetail 是 `.task-detail` + 左侧读全文抽屉的宿主，会话里那条报告链接从左边推出报告。
 function Fixture() {
   const [open, setOpen] = useState(false);
+  const drawer = useLeftDrawerHost({ resetKey: TASK_ID });
   const inspectors = usePreviewTab(DESCRIPTORS, open);
   const context = { task: { id: TASK_ID }, preview: { open, onOpen: () => setOpen(true), onClose: () => setOpen(false) } };
   return (
@@ -40,14 +46,22 @@ function Fixture() {
       <div className="workspace-shell">
         <aside id="fixture-rail" style={{ width: 220, minWidth: 220, background: "var(--chrome)", padding: 12 }}>任务栏</aside>
         <div className="workspace-main" style={{ display: "flex", minWidth: 0, flex: 1, isolation: "isolate", position: "relative" }}>
-          <InspectorHost contextKey="preview-tab-fixture" context={context} descriptors={inspectors}>
-            {() => (
-              <section id="fixture-main" style={{ display: "flex", flex: 1, flexDirection: "column", gap: 8, padding: 16 }}>
-                <p data-testid="conversation" style={{ color: "var(--faint)" }}>会话</p>
-                <textarea aria-label="回复框" />
-              </section>
-            )}
-          </InspectorHost>
+          <LeftDrawerProvider value={drawer.api}>
+            <InspectorHost contextKey="preview-tab-fixture" context={context} descriptors={inspectors}>
+              {({ toggle }) => (
+                <div className="task-detail">
+                  <section id="fixture-main" style={{ display: "flex", flex: 1, flexDirection: "column", gap: 8, padding: 16 }}>
+                    <p data-testid="conversation" style={{ color: "var(--faint)" }}>会话</p>
+                    <MarkdownBody text={REPORT} />
+                    <div style={{ flex: 1 }} />
+                    <button type="button" onClick={toggle}>开合右侧面板</button>
+                    <textarea aria-label="回复框" />
+                  </section>
+                  {drawer.drawer}
+                </div>
+              )}
+            </InspectorHost>
+          </LeftDrawerProvider>
         </div>
       </div>
       <div id="fixture-dock" style={{ height: 36, background: "var(--chrome)", borderTop: ".5px solid var(--line)" }}>状态栏</div>

@@ -5,8 +5,9 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 // 钉这几条：
 // ① 打开之后那一格是宽格、自带头带，会话和回复框原样在、打得进字；
 // ② 嵌着的页面在面板里，放大才铺满窗口，还原回到面板、页面不重载；
-// ③ 切去别的格再切回来，预览指正还开着；
-// ④ 关掉回到那一格的空态，面板回到普通宽度，会话一直在。
+// ③ 切去别的格、收起右侧面板再回来：还是原来那一份页面（不重载、页里没提交的输入还在）；
+// ④ 会话里点开审查报告：从左边推出，会话和回复框不被盖住、照样点得到；
+// ⑤ 关掉回到那一格的空态，面板回到普通宽度，会话一直在。
 // 设 SHOT=<目录> 可以顺带截图自查版式。
 
 const web = await startWebServer();
@@ -24,7 +25,7 @@ try {
     if (path === "/api/events") return route.fulfill({ status: 204 });
     if (path.includes("/preview/open/")) {
       iframeLoads++;
-      return route.fulfill({ contentType: "text/html", body: "<html><body><h1>被预览的页面</h1></body></html>" });
+      return route.fulfill({ contentType: "text/html", body: '<html><body><h1>被预览的页面</h1><input id="draft" aria-label="页内输入"></body></html>' });
     }
     if (path.endsWith("/preview") && url.searchParams.has("launch")) {
       return reply({ kind: "workflow", reason: "", directory: "/task/worktree", steps: [], configured: null, candidates: [], truncated: false });
@@ -33,6 +34,7 @@ try {
       return reply({ running: true, starting: false, hasLog: false, proxied: true, gen: "generation", startedAt: "session",
         services: [{ id: "web", name: "Web", status: "ready", url: "http://example.test", command: "npm run dev" }] });
     }
+    if (path.endsWith("/review/file")) return route.fulfill({ contentType: "text/markdown; charset=utf-8", body: "# 第 1 轮审查报告\n\n报告正文。" });
     if (path.endsWith("/annotation-review-status")) return reply({ canReopen: false, reason: "", previewKind: "workflow" });
     return reply([]);
   });
@@ -84,19 +86,51 @@ try {
   assert.ok(await conversation.isVisible(), "还原之后会话还在");
   assert.equal(iframeLoads, loads, "放大、还原不重载页面");
 
-  // ③ 切去别的格再回来，预览指正还开着。
+  // ③ 切去别的格、收起面板再回来：同一份页面，页里没提交的输入还在。
+  const frame = () => page.frames().find((candidate) => candidate.url().includes("/preview/open/"));
+  const pageDraft = () => frame().evaluate(() => document.getElementById("draft").value);
+  await frame().evaluate(() => { document.getElementById("draft").value = "尚未提交的页面内容"; });
   await page.locator(".inspector-rail__tab[aria-controls$='-panel-info']").click();
   await inspector.getByText("任务信息").waitFor();
+  assert.equal(await iframe.isVisible(), false, "切走之后预览藏起来");
   await previewTab.click();
-  await workspace.waitFor();
+  await iframe.waitFor();
+  assert.equal(iframeLoads, loads, "切格往返不重载页面");
+  assert.equal(await pageDraft(), "尚未提交的页面内容", "切格往返，页面里没提交的输入还在");
+  await button("开合右侧面板").click();
+  await inspector.waitFor({ state: "hidden" });
+  assert.ok(await reply.isVisible(), "收起右侧面板，回复框照旧");
+  await button("开合右侧面板").click();
+  await iframe.waitFor();
+  assert.equal(iframeLoads, loads, "收起、展开右侧面板不重载页面");
+  assert.equal(await pageDraft(), "尚未提交的页面内容", "收起、展开右侧面板，页面里的输入还在");
 
-  // ④ 关掉：回到空态、普通宽度，会话一直在。
+  // ④ 会话里点开审查报告：左边推出，会话和回复框让到右边、照样点得到。
+  await page.getByRole("link", { name: "第 1 轮报告", exact: true }).click();
+  const report = page.getByRole("complementary", { name: "审查报告：report.md" });
+  await report.getByRole("heading", { name: "第 1 轮审查报告" }).waitFor();
+  await settled();
+  const hitsSelf = (locator) => locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  });
+  assert.ok(await hitsSelf(reply), "报告开着，回复框没被抽屉或遮罩盖住");
+  assert.ok(await hitsSelf(conversation), "报告开着，会话没被盖住");
+  const reportBox = await report.boundingBox(), replyBox = await reply.boundingBox();
+  assert.ok(replyBox.x >= reportBox.x + reportBox.width - 1, "会话一栏让到报告右边");
+  await reply.fill("读着报告接着说");
+  assert.equal(await reply.inputValue(), "读着报告接着说");
+  assert.equal(await workspace.count(), 1, "报告开着时预览指正照旧在右边");
+  await report.getByRole("button", { name: "关闭审查报告" }).click();
+  await report.waitFor({ state: "detached" });
+
+  // ⑤ 关掉：回到空态、普通宽度，会话一直在。
   await button("关闭预览指正").click();
   await button("打开预览指正").waitFor();
   assert.equal(await workspace.count(), 0);
   await page.waitForFunction((width) => Math.round(document.querySelector(".inspector-host").getBoundingClientRect().width) === Math.round(width), narrowWidth);
   assert.ok(await conversation.isVisible(), "关掉之后会话照旧");
-  assert.equal(await reply.inputValue(), "边看页面边说", "开关预览指正不动回复框里的字");
+  assert.equal(await reply.inputValue(), "读着报告接着说", "开关预览指正不动回复框里的字");
 
   assert.deepEqual(errors, []);
   console.log("preview tab test passed");
