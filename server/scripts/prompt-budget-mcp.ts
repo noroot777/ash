@@ -21,6 +21,9 @@ export const MCP_TOOL_BUDGETS: Record<string, number> = {
   // 2026-11-15 +100（500 → 590 实测）：返回字段里多了 prerequisites（前置到哪一步 / 在不在等），派活的
   // 智能体靠它看一串任务卡在哪，不再在任务说明里让执行者「没合入就提问等着」。
   "mcp/list_tasks": 600,
+  // 2026-11-20 新增（786 实测）：把本任务改到独立工作区。说明里只留什么时候用、别自己 `git worktree add`、
+  // 调完结束回合、会被拒的两种情形。
+  "mcp/move_to_worktree": 850,
   "mcp/patch_task": 1100,
   "mcp/pause_task": 950,
   // 2026-11-15 新增（2068 实测）：派活单。说明里只留「什么时候用、调完会怎样、别再自己建一遍」；

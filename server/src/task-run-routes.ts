@@ -26,6 +26,7 @@ import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
 import { mountTaskSteerRoutes } from "./task-steer.js";
+import { mountWorktreeMoveRoutes } from "./task-worktree-move-routes.js";
 import { flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
 import { withAfterGates } from "./pending-after.js";
 import { pendingMessagePresence } from "./pending-wait.js";
@@ -80,6 +81,7 @@ export function mountTaskRunRoutes(api: Hono): void {
   mountTaskScheduleRoutes(api);
   mountTaskSessionRoutes(api);
   mountTaskSteerRoutes(api);
+  mountWorktreeMoveRoutes(api);
   mountTaskQuestionRoutes(api);
   mountDispatchPlanRoutes(api);
   mountDispatchSuggestionRoutes(api);
