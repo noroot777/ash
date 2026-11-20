@@ -4,6 +4,7 @@
 // 选合入分支（缺省按起点定：远端分支合进本地同名分支，本地没有就照远端建一条），交给服务端办
 // （server/src/task-worktree-move.ts，起点规则跟新建任务同一份）。办成之后任务行和会话行都改指新工作区，
 // 这一行和「目录」「改动」跟着换过来。智能体登记了还没办的那一次，在分支名后淡淡写一句，可以撤回。
+// 智能体没走这条路、自己建了 worktree 的，旁边另有一颗「收编」（InfoAdoptWorktree.tsx）。
 import { useEffect, useState } from "react";
 import type { Session, Task } from "@navi/shared";
 import type { ProjectBranches } from "@navi/shared/task-branch";
@@ -13,6 +14,7 @@ import { HoverTip, useHoverTip } from "../../components/HoverTip.tsx";
 import { InspButton, InspCopy, InspRow, InspTool } from "../../inspector/parts.tsx";
 import { api } from "../../lib/api.ts";
 import { useProjectGit } from "../../workspace/useProjectGit.ts";
+import { AdoptForm, AdoptTool, useForeignWorktrees } from "./InfoAdoptWorktree.tsx";
 
 const BY_BASE = "";
 const shortRef = (ref: string) => ref.replace(/^refs\/remotes\//, "");
@@ -135,15 +137,17 @@ function PendingMove({ task, notify }: { task: Task; notify: (message: string) =
 
 export function InfoBranchRow({ task, session, notify }: { task: Task; session: Session; notify: (message: string) => void }) {
   const hover = useHoverTip();
-  const [moving, setMoving] = useState(false);
+  const [open, setOpen] = useState<"move" | "adopt" | null>(null);
   const branch = session.branch!;
   // 跟服务端 worktreeMoveBlocker 同一组条件：验收合并过的，改动早已落在项目里，不给入口。
   const movable = !task.useWorktree && !task.reviewOf && task.mode === "single" && !task.archived
     && task.stage !== "accepted" && task.stage !== "merged"
     && task.status !== "running" && task.status !== "queued" && !task.worktreeMoveRequest;
+  const foreign = useForeignWorktrees(task, movable);
   useEffect(() => {
-    if (!movable) setMoving(false);
+    if (!movable) setOpen(null);
   }, [movable]);
+  const toggle = (which: "move" | "adopt") => setOpen((current) => current === which ? null : which);
   return (
     <>
       <InspRow label="分支" className={task.useWorktree ? "" : "is-danger"}>
@@ -151,13 +155,15 @@ export function InfoBranchRow({ task, session, notify }: { task: Task; session: 
         <HoverTip at={hover.at}>{task.useWorktree ? branch : `${branch}（没有独立工作区，直接在这条分支上改）`}</HoverTip>
         {task.worktreeMoveRequest && <PendingMove task={task} notify={notify} />}
         <InspCopy text={branch} label="复制分支名" onError={notify} />
+        {movable && foreign && <AdoptTool found={foreign} open={open === "adopt"} onToggle={() => toggle("adopt")} />}
         {movable && (
-          <InspTool label="改到独立工作区…" className="insp-copy" aria-expanded={moving} onClick={() => setMoving((current) => !current)}>
+          <InspTool label="改到独立工作区…" className="insp-copy" aria-expanded={open === "move"} onClick={() => toggle("move")}>
             <GitFork size={14} aria-hidden="true" />
           </InspTool>
         )}
       </InspRow>
-      {moving && movable && <MoveForm task={task} session={session} onClose={() => setMoving(false)} notify={notify} />}
+      {open === "move" && movable && <MoveForm task={task} session={session} onClose={() => setOpen(null)} notify={notify} />}
+      {open === "adopt" && movable && foreign && <AdoptForm task={task} found={foreign} onClose={() => setOpen(null)} notify={notify} />}
     </>
   );
 }

@@ -5,6 +5,8 @@
 //       只登记 + 留一段续跑交代，回合结束后叫起下一回合，由下一回合开头办。
 //     · 任务没在跑（用户在信息格里点）：当场占住回合锁办完。
 //   DELETE /tasks/:id/worktree-move   撤回还没办的登记（下一回合照旧在原目录里跑，并告诉智能体撤回了）。
+//   GET    /tasks/:id/foreign-worktrees  智能体自己建的、Navi 没管到的工作区，各带一句收不收得了（foreign-worktrees.ts）
+//   POST   /tasks/:id/worktree-adopt   { path, mergeTargetBranch? } 收编其中一个（task-worktree-adopt.ts），只给没在跑的任务
 //
 // 登记和撤回都按「此刻还是我读到的那一份」比对着写；撤回在仓库锁里做，跟「办」的那一段互斥
 // （办的一方进锁后会重读登记，见 task-worktree-move.ts），所以撤回回了成功，任务就一定没被搬走。
@@ -19,11 +21,13 @@ import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { appendTaskTimeline, alertLine } from "./task-timeline.js";
 import {
-  dirtyProjectError, moveTaskToWorktree, requestIs, wakeForWorktreeMove, worktreeMoveBlocker, worktreeMoveInputError, WorktreeMoveError,
+  dirtyProjectError, moveTaskToWorktree, requestIs, taskMoveBlocker, wakeForWorktreeMove, worktreeMoveBlocker, worktreeMoveInputError, WorktreeMoveError,
 } from "./task-worktree-move.js";
 import { parseWorktreeMoveRequest, serializeWorktreeMoveRequest } from "./worktree-move-request.js";
 import { withRepoLock } from "./repo-lock.js";
-import { expandHome } from "./git.js";
+import { expandHome, resolveTaskMergeTarget } from "./git.js";
+import { foreignWorktreesOf } from "./foreign-worktrees.js";
+import { adoptForeignWorktree, adoptionBlocker } from "./task-worktree-adopt.js";
 import { now } from "./util.js";
 
 const refused = (c: Context, error: unknown) => {
@@ -94,6 +98,42 @@ export function mountWorktreeMoveRoutes(api: Hono): void {
     try {
       const moved = await moveTaskToWorktree(taskId, input);
       return c.json({ moved });
+    } catch (error) {
+      return refused(c, error);
+    } finally {
+      releaseTurn(taskId, turn);
+    }
+  });
+
+  api.get("/tasks/:id/foreign-worktrees", async (c) => {
+    const task = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
+    if (!task) return c.json({ error: "not found" }, 404);
+    const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+    if (!project || await taskMoveBlocker(task, project.repoPath)) return c.json({ worktrees: [], mergeTarget: null });
+    const found = await foreignWorktreesOf(task, project.repoPath);
+    const worktrees = await Promise.all(found.map(async (worktree) => ({
+      path: worktree.path, seenAs: worktree.seenAs, branch: worktree.branch, head: worktree.head,
+      blocker: (await adoptionBlocker(task, project.repoPath, worktree))?.message ?? null,
+    })));
+    const mergeTarget = found.length ? await resolveTaskMergeTarget(project.repoPath, null) : null;
+    return c.json({ worktrees, mergeTarget: mergeTarget === "HEAD" ? null : mergeTarget });
+  });
+
+  api.post("/tasks/:id/worktree-adopt", async (c) => {
+    const taskId = c.req.param("id");
+    const body = await c.req.json<{ path?: unknown; mergeTargetBranch?: unknown }>().catch(() => ({}) as Record<string, unknown>);
+    const path = typeof body.path === "string" ? body.path.trim() : "";
+    if (!path) return c.json({ error: "要给出收编哪个工作区（path）" }, 400);
+    const mergeTargetBranch = typeof body.mergeTargetBranch === "string" && body.mergeTargetBranch.trim() ? body.mergeTargetBranch.trim() : null;
+    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!task) return c.json({ error: "not found" }, 404);
+    // 智能体正在那个目录里跑的时候挪不得：收编只在任务停着时办。
+    if (task.status === "running" || task.status === "queued") return c.json({ error: "任务正在运行，等它停下再收编" }, 409);
+    if (isAcceptingTask(taskId)) return c.json({ error: "任务正在验收，结束后再收编" }, 409);
+    const turn = claimOwnTurn(taskId, "single");
+    if (!turn) return c.json({ error: turnBusyText(taskId, "收编工作区") }, 409);
+    try {
+      return c.json({ adopted: await adoptForeignWorktree(taskId, { path, mergeTargetBranch }) });
     } catch (error) {
       return refused(c, error);
     } finally {

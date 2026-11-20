@@ -28,7 +28,7 @@
 // 项目目录里有未提交的改动时一律不办：新工作区从起点的提交开出，那些改动带不过去；悄悄留在原地，
 // 智能体换了目录就再也看不见它们，替用户搬走或丢掉更不行。拒绝的话里列出是哪几个文件、该怎么处理。
 import { cpSync, copyFileSync, existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { and, eq, exists, inArray, isNotNull, isNull, type SQL } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { HTTPException } from "hono/http-exception";
@@ -81,6 +81,24 @@ export type WorktreeMoved = {
 
 /** 这条任务现在能不能改到独立工作区：不能就给出原因。只读，不看项目目录脏不脏（那一条见 `dirtyProjectError`）。 */
 export async function worktreeMoveBlocker(task: TaskRow, repoPath: string): Promise<WorktreeMoveError | null> {
+  const refused = await taskMoveBlocker(task, repoPath);
+  if (refused) return refused;
+  const repo = expandHome(repoPath);
+  const branch = await resolveWorktreeBranchName(repo, task.id);
+  if (await localBranchExists(repo, branch)) {
+    return new WorktreeMoveError(`仓库里已经有分支 ${branch}（本任务的分支名），先把它改名或删掉再改`);
+  }
+  if (existsSync(worktreePathFor(repo, task.id))) {
+    return new WorktreeMoveError(`目录 ${worktreePathFor(repo, task.id)} 已经存在，先把它挪走再改`);
+  }
+  return null;
+}
+
+/**
+ * 只看任务本身（不看任务分支和 `.worktrees/<id>` 那个位置被没被占）：新建工作区和收编智能体自建的工作区
+ * （task-worktree-adopt.ts）共用这一组条件，位置那一条两边判法不同。
+ */
+export async function taskMoveBlocker(task: TaskRow, repoPath: string): Promise<WorktreeMoveError | null> {
   if (task.useWorktree) return new WorktreeMoveError("本任务已经在独立工作区里了");
   if (task.reviewOf) return new WorktreeMoveError("审查任务跟着被审任务的工作区走，不能单独改");
   if (task.mode !== "single") return new WorktreeMoveError("只有普通任务能改到独立工作区");
@@ -95,15 +113,7 @@ export async function worktreeMoveBlocker(task: TaskRow, repoPath: string): Prom
     const parent = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, task.parentId))).at(0);
     if (parent?.mode === "team") return new WorktreeMoveError("团队执行者跟着调度台的工作区走，不能单独改");
   }
-  const repo = expandHome(repoPath);
-  if (!(await isGitRepo(repo))) return new WorktreeMoveError("项目目录不是 git 仓库，建不了独立工作区", 400);
-  const branch = await resolveWorktreeBranchName(repo, task.id);
-  if (await localBranchExists(repo, branch)) {
-    return new WorktreeMoveError(`仓库里已经有分支 ${branch}（本任务的分支名），先把它改名或删掉再改`);
-  }
-  if (existsSync(worktreePathFor(repo, task.id))) {
-    return new WorktreeMoveError(`目录 ${worktreePathFor(repo, task.id)} 已经存在，先把它挪走再改`);
-  }
+  if (!(await isGitRepo(expandHome(repoPath)))) return new WorktreeMoveError("项目目录不是 git 仓库，建不了独立工作区", 400);
   return null;
 }
 
@@ -125,23 +135,36 @@ export async function worktreeMoveInputError(repoPath: string, input: WorktreeMo
 
 /** 项目目录里有未提交的改动 → 不办，并说清楚是哪几个、该怎么处理。 */
 export async function dirtyProjectError(repoPath: string, base: string): Promise<WorktreeMoveError | null> {
-  const repo = expandHome(repoPath);
-  let lines: string[];
-  try {
-    lines = (await exec("git", ["-C", repo, "status", "--porcelain"])).stdout.split("\n").filter(countsAsProjectChange);
-  } catch {
-    return new WorktreeMoveError("读不出项目目录的 git 状态，没法确认有没有未提交的改动");
-  }
-  if (!lines.length) return null;
-  const files = porcelainFiles(lines.join("\n"));
+  const files = await projectDirtyFiles(repoPath);
+  if (files instanceof WorktreeMoveError) return files;
+  if (!files.length) return null;
   return new WorktreeMoveError(
-    `项目目录 ${repo} 里有未提交的改动（${listFiles(files)}）。新工作区从 ${base} 的提交开出，带不上这些改动；`
+    `项目目录 ${expandHome(repoPath)} 里有未提交的改动（${listFiles(files)}）。新工作区从 ${base} 的提交开出，带不上这些改动；`
     + "Navi 不会替你搬走或丢掉它们。先提交、收起（git stash）或撤销，再改到独立工作区。",
   );
 }
 
+/**
+ * 项目目录里未提交的文件。`except` 是一个嵌在项目目录里的 worktree（收编时要挪走的那个）：它在 git 眼里是
+ * 一个未跟踪的目录，不算项目目录的改动。为了能按它的路径认出来，这时逐个列未跟踪的文件（`-uall`），
+ * 否则 git 会把它和同级的东西折成上一层目录（`.claude/`）。
+ */
+export async function projectDirtyFiles(repoPath: string, except?: string): Promise<string[] | WorktreeMoveError> {
+  const repo = expandHome(repoPath);
+  try {
+    const args = ["-C", repo, "status", "--porcelain", ...(except ? ["-uall"] : [])];
+    const lines = (await exec("git", args)).stdout.split("\n").filter(countsAsProjectChange);
+    const files = porcelainFiles(lines.join("\n"));
+    if (!except) return files;
+    const inside = relative(realDir(repo), realDir(except)).split(sep).join("/");
+    return files.filter((file) => file.replace(/\/$/, "") !== inside);
+  } catch {
+    return new WorktreeMoveError("读不出项目目录的 git 状态，没法确认有没有未提交的改动");
+  }
+}
+
 /** initializeBranchPlan 用 HTTPException 报「起点 / 合入目标不对」：换成这里的错误，原话照用。 */
-async function planError(error: unknown): Promise<WorktreeMoveError | null> {
+export async function planError(error: unknown): Promise<WorktreeMoveError | null> {
   if (!(error instanceof HTTPException)) return null;
   const body = await error.getResponse().clone().json().catch(() => null) as { error?: string } | null;
   return new WorktreeMoveError(body?.error || error.message, error.status === 400 ? 400 : 409);
@@ -154,7 +177,7 @@ async function planError(error: unknown): Promise<WorktreeMoveError | null> {
 const realDir = (path: string) => { try { return realpathSync(path); } catch { return path; } };
 const spellings = (path: string) => [...new Set([realDir(path), path])];
 
-type SessionMove = { rows: string[]; created: string[]; notes: string[] };
+export type SessionMove = { rows: string[]; created: string[]; notes: string[] };
 
 /**
  * 这条任务（和挂在它身上的老式审查任务）记在项目目录上的会话行：claude 的会话文件复制一份到新目录对应的
@@ -162,7 +185,7 @@ type SessionMove = { rows: string[]; created: string[]; notes: string[] };
  * 不归这里管。会话行本身不在这里改：跟任务行一起原子落库（`moveTaskToWorktree`）。
  * 复制出来的每个文件、目录都记进 `created`，后面哪一步失败都按它收回；已经在那儿的不记、不碰。
  */
-async function carrySessions(taskId: string, from: string, to: string, move: SessionMove): Promise<void> {
+export async function carrySessions(taskId: string, from: string, to: string, move: SessionMove): Promise<void> {
   const reviewers = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.reviewOf, taskId));
   const rows = await db.select().from(sessions).where(inArray(sessions.taskId, [taskId, ...reviewers.map((row) => row.id)]));
   const key = repoKey(from);
@@ -246,6 +269,27 @@ const movedLine = (moved: WorktreeMoved) =>
   + `原项目目录 ${moved.from} 里的东西没有动。`
   + (moved.notes.length ? ` ${moved.notes.join("；")}。` : "");
 
+export type MovedPlan = Pick<TaskRow, "worktreeBase" | "worktreeStartCommit" | "worktreeBaseBranch" | "mergeTargetBranch" | "baseTaskId">;
+
+/**
+ * 落库：任务行改成「开了独立工作区」，会话行改指新目录。会话行和任务行一批落：中间没有 await，要么全改指
+ * 新目录、要么一行不动。每条都带着「登记还是那一份、任务还没有独立工作区」。没写上（被改动了）回 false。
+ */
+export async function writeMovedTask(
+  taskId: string, expected: string | null, sessionRows: string[], made: { path: string; branch: string }, plan: MovedPlan, note: string,
+): Promise<boolean> {
+  const unchanged = and(eq(tasks.id, taskId), requestIs(expected), eq(tasks.useWorktree, false));
+  const stillMine = exists(db.select({ id: tasks.id }).from(tasks).where(unchanged));
+  const sessionWrites: BatchItem<"sqlite">[] = sessionRows.map((id) => db.update(sessions)
+    .set({ cwd: made.path, worktreePath: made.path, branch: made.branch }).where(and(eq(sessions.id, id), stillMine)));
+  const taskWrite = db.update(tasks).set({
+    useWorktree: true, ...plan, worktreeMoveRequest: null, workspaceNote: note, updatedAt: now(),
+  }).where(unchanged).returning({ id: tasks.id });
+  // 任务行那条排最后：它会把登记清掉，排在它后面的会话行就看不到「还是那一份」了。
+  const written = await db.batch([...sessionWrites, taskWrite] as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+  return (written.at(-1) as unknown[]).length > 0;
+}
+
 /**
  * 办：建 worktree、改任务行、改会话行、搬会话文件、留记录。**调用方必须握着这条任务的回合锁**
  * （用户入口当场占，智能体那条路在下一回合开头办），否则一个正在起跑的回合会落在旧目录里。
@@ -301,19 +345,12 @@ export async function moveTaskToWorktree(taskId: string, input: WorktreeMoveInpu
         from: repo, path: made.path, branch: made.branch, base: row.worktreeBaseBranch || row.worktreeBase || startCommit, startCommit,
         mergeTargetBranch: row.mergeTargetBranch ?? null, trackingBranch: plan.trackingBranch?.name ?? null, notes: carried.notes,
       };
-      // 会话行和任务行一批落：中间没有 await，要么全改指新目录、要么一行不动。每条都带着「登记还是那一份」。
-      const unchanged = and(eq(tasks.id, task.id), requestIs(expected), eq(tasks.useWorktree, false));
-      const stillMine = exists(db.select({ id: tasks.id }).from(tasks).where(unchanged));
-      const sessionWrites: BatchItem<"sqlite">[] = carried.rows.map((id) => db.update(sessions)
-        .set({ cwd: made.path, worktreePath: made.path, branch: made.branch }).where(and(eq(sessions.id, id), stillMine)));
-      const taskWrite = db.update(tasks).set({
-        useWorktree: true, worktreeBase: row.worktreeBase, worktreeStartCommit: startCommit,
+      const written = await writeMovedTask(task.id, expected, carried.rows, made, {
+        worktreeBase: row.worktreeBase ?? null, worktreeStartCommit: startCommit,
         worktreeBaseBranch: row.worktreeBaseBranch ?? null, mergeTargetBranch: row.mergeTargetBranch ?? null,
-        baseTaskId: row.baseTaskId ?? null, worktreeMoveRequest: null, workspaceNote: movedNote(result), updatedAt: now(),
-      }).where(unchanged).returning({ id: tasks.id });
-      // 任务行那条排最后：它会把登记清掉，排在它后面的会话行就看不到「还是那一份」了。
-      const written = await db.batch([...sessionWrites, taskWrite] as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
-      if (!(written.at(-1) as unknown[]).length) throw expected === null ? new WorktreeMoveError("任务在办的过程中被改动了，没有改成，再试一次") : new WorktreeMoveWithdrawn();
+        baseTaskId: row.baseTaskId ?? null,
+      }, movedNote(result));
+      if (!written) throw expected === null ? new WorktreeMoveError("任务在办的过程中被改动了，没有改成，再试一次") : new WorktreeMoveWithdrawn();
       return result;
     } catch (error) {
       // 唯一的失败出口：按账收回，不管是在哪一步失败的。

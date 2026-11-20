@@ -49,6 +49,7 @@ import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
 import { prerequisiteApi } from "./apiPrerequisites.ts";
 import { taskMemoApi } from "./apiTaskMemos.ts";
+import { worktreeAdoptApi } from "./apiWorktreeAdopt.ts";
 import { userMessageApi } from "./apiUserMessages.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
@@ -651,6 +652,7 @@ export const api = {
   ...previewAssistApi,
   // 任务备忘同理，住在 apiTaskMemos.ts。
   ...taskMemoApi,
+  ...worktreeAdoptApi,
   // R 键「我说过的话」同理，住在 apiUserMessages.ts。
   ...userMessageApi,
   // 飞书通道那一组住在 feishuApi.ts（守 700 行）。
