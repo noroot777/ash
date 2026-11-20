@@ -6,7 +6,8 @@
 //
 // 不等的那几件派出去，这条任务的智能体不被叫醒，所以它在跑时也照派；会话里那一句「开了新任务」由页面从任务列表里
 // 认（web/src/task-detail/dispatchNotes.ts：dispatchedBy 指向这条、创建来源是用户）。等着的那一批处理完时按它说定的
-// 那一档收尾：done 当场结成完成、不叫醒；continue 把清单作为答复续上会话。
+// 那一档收尾：done 结成完成、不叫醒（欠账跟处理完同一笔落库，怎么还见 dispatch-suggestion-settle.ts）；continue 把清单
+// 作为答复续上会话。
 import type { Context } from "hono";
 import { suggestionTaskBody, type StoredSuggestion } from "@navi/shared/dispatch-suggestion";
 import { db } from "./db/index.js";

@@ -37,6 +37,7 @@ import { mountTaskReadRoutes } from "./task-read-routes.js";
 import { mountPrerequisiteRoutes, prerequisiteRefusal, stringList } from "./prerequisite-routes.js";
 import { republishPrerequisiteView } from "./prerequisite-view.js";
 import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
+import { voidLaunchDebt } from "./dispatch-suggestion-settle.js";
 
 export function mountTaskRoutes(api: Hono): void {
   // 删除那一族(连带关联行 + DELETE 本体)住在 task-delete-routes.ts、只读的查询那几条住在
@@ -592,6 +593,8 @@ api.patch("/tasks/:id", async (c) => {
     if (b.status !== undefined) {
       // 用户手动标完成是一次完成;本来就是 done 再标一次不是(见 status.ts 的 `completion`)。
       await setTaskStatus(tid, b.status, b.status === "done" && existing.status !== "done" ? { completion: true } : undefined);
+      // 用户亲手定了状态：派出去就算完成那份旧授权当场作废，之后再被改回原状态也不复活（dispatch-suggestion-settle.ts）。
+      await voidLaunchDebt(tid);
     }
   } finally {
     // 每一条出路都得还回去（含上面那个 409 early return），否则任务就被一次 PATCH 锁死。

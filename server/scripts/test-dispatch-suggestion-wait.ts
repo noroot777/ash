@@ -28,7 +28,7 @@ import { delimiter, join } from "node:path";
 import { asc, eq, inArray, like, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Task } from "@navi/shared";
-import { isDispatchLaunchReply, type DispatchSuggestion } from "@navi/shared/dispatch-suggestion";
+import { isDispatchLaunchRecord, type DispatchSuggestion } from "@navi/shared/dispatch-suggestion";
 import { releaseTmpDb } from "./tmp-db.js";
 import { installExitingClis, installFakeClaude } from "./scheduled-messages-fixture.js";
 
@@ -245,9 +245,9 @@ try {
   assert.ok(kids.every((kid) => JSON.parse(kid.creationOrigin ?? "{}").kind === "user"), "建任务的是 navi 照用户按下的那一下建的");
   assert.equal((await db.select().from(taskPrerequisites).where(inArray(taskPrerequisites.taskId, kids.map((kid) => kid.id)))).length, 0,
     "等的那件叉掉了：最后那件不再带它的前置");
-  const record = (JSON.parse((await taskOf(P)).questionHistory ?? "[]") as { answer: string; reply: string }[]).at(-1)!;
+  const record = (JSON.parse((await taskOf(P)).questionHistory ?? "[]") as { answer: string; reply: string; dispatchLaunch?: true }[]).at(-1)!;
   assert.equal(record.answer, "派出这 2 个任务\n同时 · 第 2 条交给 gemini · 去掉了「关掉起手式的新建入口」", "问答记录里答的那一句：派出几个、一句改动");
-  assert.ok(isDispatchLaunchReply(record.reply), "续上会话的答复认得出是派出回执（会话里不画成气泡）");
+  assert.ok(record.dispatchLaunch && isDispatchLaunchRecord(record), "续上会话的答复认得出是派出回执（会话里不画成气泡）");
   await waitFor(() => delivered().includes(kids[1]!.id), "续上的会话里没有建好的任务清单");
   const reply = delivered();
   assert.ok(reply.includes(`${kids[0]!.id}「验收门禁加准备命令」→ codex · gpt-5.6`), "智能体拿得到任务号、标题、交给了谁（早先那一下派的也在）");
@@ -275,9 +275,11 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.ok(!delivered().slice(leadBefore).includes(P), "没有叫醒智能体");
   assert.equal(runs.isRunning(P), false);
-  const finaleRecord = (JSON.parse((await taskOf(P)).questionHistory ?? "[]") as { reply: string; undelivered?: boolean }[]).at(-1)!;
+  const finaleRecord = (JSON.parse((await taskOf(P)).questionHistory ?? "[]") as { answer: string; reply: string; undelivered?: boolean; dispatchLaunch?: true; settleOwed?: unknown }[]).at(-1)!;
   assert.equal(finaleRecord.undelivered, true, "清单记在问答记录上，还没交给智能体");
-  assert.ok(isDispatchLaunchReply(finaleRecord.reply) && !finaleRecord.reply.startsWith("【答复】"), "补交的那段认得出，且不冒充答复");
+  assert.ok(isDispatchLaunchRecord(finaleRecord) && !finaleRecord.reply.startsWith("【答复】"), "补交的那段认得出，且不冒充答复");
+  await waitFor(async () => !(await taskOf(P)).questionHistory?.includes('"settleOwed"'),
+    "当场收尾做完没有销账（还不上的那几种见 test-dispatch-suggestion-settle.ts）");
   const chat = await send("POST", `/tasks/${P}/reply`, { text: "接着聊一句(dw-after)" });
   assert.ok(chat.status < 300, JSON.stringify(chat.body));
   await waitFor(() => delivered().includes("dw-after"), "接着聊的那句没有送进会话");

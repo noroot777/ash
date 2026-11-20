@@ -3,7 +3,7 @@ import {
   formatQuestionAnswers, legacyQuestionRecord, pairAnswerMessages, questionItems, questionOptionSelected, type QuestionRecord,
 } from "@navi/shared/questions";
 import { parseAttachmentText } from "@navi/shared/attachments";
-import { isDispatchLaunchReply } from "@navi/shared/dispatch-suggestion";
+import { isDispatchLaunchRecord } from "@navi/shared/dispatch-suggestion";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import type { ConversationSource } from "./conversationModel.ts";
@@ -132,9 +132,9 @@ export function AnsweredQuestionMessage({ text, id, at, deletable, attachments =
   text: string; id: string; at?: string; deletable?: DeletableItem; attachments?: readonly string[];
 }) {
   const { pairing } = useContext(HistoryContext);
-  // 派活单「派出去」的回执：那一下已经由每条新任务各一句「开了新任务」说过了（dispatchNotes.ts）。
-  if (isDispatchLaunchReply(text)) return null;
   const paired = pairing.paired.get(id);
+  // 派出去那一下的回执：已经由每条新任务各一句「开了新任务」说过了（dispatchNotes.ts）。
+  if (paired && !paired.deleted && isDispatchLaunchRecord(paired)) return null;
   // 带了附件的答复，会话原文尾部是附件块（server attachmentsPrompt）：摘出来画成缩略图，答案只留正文。
   const parsed = parseAttachmentText(text);
   const record = (paired && !paired.deleted ? paired : undefined)
@@ -151,7 +151,7 @@ export function AnsweredQuestionMessage({ text, id, at, deletable, attachments =
 export function QuestionHistoryRemainder() {
   const { pairing, error, retry } = useContext(HistoryContext);
   return <>
-    {pairing.unpaired.filter((record) => !isDispatchLaunchReply(record.reply)).map((record) => <AnsweredQuestionCard key={record.id} record={record} />)}
+    {pairing.unpaired.filter((record) => !isDispatchLaunchRecord(record)).map((record) => <AnsweredQuestionCard key={record.id} record={record} />)}
     {error && <p className="task-question-history-error" role="status">问答记录加载失败 <button type="button" onClick={retry}>重试</button></p>}
   </>;
 }

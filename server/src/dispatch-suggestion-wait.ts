@@ -1,20 +1,17 @@
 // 等着的那一批（wait = done / continue，shared/src/dispatch-suggestion.ts 文件头）在服务端的几段话和收尾：
 //   · 摆出来时写进 `task.question` 的那一句清单（`planQuestionText`）：网页上框顶画成一行行，这句话是给
 //     不认识它的地方看的（手机、飞书、问答历史里的引文）——看得出在等什么，回一句话就是「发回去改」；
-//   · 处理完那一下留在问答记录里的两段：用户答的那一句（`launchBubble`）和交给智能体的清单（`launchReply`）；
-//   · done 的收尾（`settleDoneOnLaunch`）：派完就算完成，摆单那一刻智能体已经替这一下确认过。
-// 处理完是哪一笔、怎么跟建任务同一笔提交，在 dispatch-suggestion-resolve.ts。
+//   · 处理完那一下留在问答记录里的两段：用户答的那一句（`launchBubble`）和交给智能体的清单（`launchReply`）。
+// 处理完是哪一笔、怎么跟建任务同一笔提交，在 dispatch-suggestion-resolve.ts；done 欠下的那一下收尾怎么还，在
+// dispatch-suggestion-settle.ts。
 import { dispatchDefaultTarget, parseDispatchTarget, sameDispatchTarget, type DispatchRunTarget } from "@navi/shared/dispatch-target";
 import {
   DISPATCH_LAUNCH_REPLY_LEAD, DISPATCH_ORDER_LABEL, type DispatchOrder, type StoredSuggestion,
 } from "@navi/shared/dispatch-suggestion";
-import type { AgentType, TaskStatus } from "@navi/shared";
+import type { AgentType } from "@navi/shared";
 import { db } from "./db/index.js";
 import { agents } from "./db/schema.js";
 import type { TaskRow } from "./task-store.js";
-import { claimOwnTurn, releaseTurn } from "./runs.js";
-import { setTaskStatus } from "./status.js";
-import { afterSettlement } from "./settle-status.js";
 
 export const DISPATCH_WAIT_BLOCKS_ASK =
   "这一回合已经摆了一批派活在等用户过目，不能再提问：同一时刻只等用户一样东西。要问的话写进那几件的说明里，或等用户回了再问";
@@ -71,8 +68,8 @@ export function launchBubble(batch: readonly Settled[], order: DispatchOrder, pr
 /**
  * 交给智能体的那段话：建好了哪几条（任务号、标题、交给了谁），去掉了哪几条，别再建一遍。`settledDone` = 派完就算完成：
  * 这段不是续上会话的答复，是它下一回合开头才收到的补交，所以不带【答复】、写明这条任务已经替它结成了完成。
- * 建了任务的那种以 `DISPATCH_LAUNCH_REPLY_LEAD` 开头，会话里据此认出它、不画成气泡（那一下由「开了新任务」说）；
- * 全点叉了的那种照常画：会话里没有别的地方说过这件事。
+ * 建了任务的那种以 `DISPATCH_LAUNCH_REPLY_LEAD` 开头，那条问答记录带 `dispatchLaunch`，会话里据此认出它、不画成
+ * 气泡（那一下由「开了新任务」说）；全点叉了的那种照常画：会话里没有别的地方说过这件事。
  */
 export function launchReply(batch: readonly Settled[], order: DispatchOrder, label: TargetLabel, settledDone: boolean): string {
   const launched = batch.flatMap((item) => (item.settled.task ? [item.settled.task] : []));
@@ -90,26 +87,4 @@ export function launchReply(batch: readonly Settled[], order: DispatchOrder, lab
     ...launched.map((task, index) => `${index + 1}. ${task.id}「${task.title}」→ ${label(task.target)}`),
     ...(dropped.length ? [`用户去掉了：${dropped.join("、")}（没有建）`] : []),
   ].join("\n");
-}
-
-/**
- * 「派完就算完成」：摆单那一刻智能体已经替这一下确认过完成（wait = done），这里替它把这一步落下，走的是用户手动
- * 标完成那一条（同 PATCH status：占住回合 → setTaskStatus 带 `completion`），再接上回合正常结束后本该接上的结算
- * 后续（预约的审查照常开、派它的任务照常收到通知）。
- *
- * 只认处理完那一刻读到的状态（`status`）：中间被别的东西叫起来了（排着的消息刚送进去）就不抢——那一回合自己会
- * 结算，清单留在问答记录上，它下一回合开头照样拿得到。本来就是已完成（完成之后的续聊里摆的单）不再记一次完成。
- * 不跟处理完同一笔提交：落 done 那一笔要带队列推进、停哨兵、结算后续（status.ts），只有 setTaskStatus 这一个
- * 入口做得全。万一在两笔之间断掉，这条任务停在没有提问的暂停上，手动标完成即可。
- */
-export async function settleDoneOnLaunch(taskId: string, status: string): Promise<void> {
-  if (status === "done") return;
-  const turn = claimOwnTurn(taskId, "status");
-  if (!turn) return;
-  try {
-    if (!await setTaskStatus(taskId, "done", { completion: true, expectStatus: status as TaskStatus })) return;
-    await afterSettlement(taskId, "done", true);
-  } finally {
-    releaseTurn(taskId, turn);
-  }
 }

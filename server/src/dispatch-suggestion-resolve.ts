@@ -6,8 +6,9 @@
 //   · 不等的那几件派了、叉了就从这一列拿掉；等着的那一批里的留一个了结记录（`settled`），这一批最后一件了结
 //     的那一下就是「处理完」：同一笔里认领那一问（问答记录：用户答的那一句 + 交给智能体的清单）、整批拿掉，
 //     continue 还写一条待发送答复（由待发送托盘送进会话——它本来就扛重启、扛「回合被占着」「同队前项还在跑」），
-//     done 不写（清单记在问答记录的 `undelivered` 上，下一回合开头补交）。
-// 提交之后（`afterResolved`）只剩「让人看见」和「催一下」，外加 done 的结成完成；每一步各自兜底、互不挡路。
+//     done 不写（清单记在问答记录的 `undelivered` 上，下一回合开头补交），换成记下欠的那一下收尾（`settleOwed`）。
+// 提交之后（`afterResolved`）只剩「让人看见」和「催一下」，外加当场还一次 done 欠下的收尾（还不上的由
+// dispatch-suggestion-settle.ts 开机、每分钟接着还）；每一步各自兜底、互不挡路。
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import type { DispatchRunTarget } from "@navi/shared/dispatch-target";
@@ -17,7 +18,8 @@ import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { readSuggestions, rewritePrerequisites, scopedKey, serializedSuggestions, waitingBatchOf } from "./dispatch-suggestion.js";
-import { launchBubble, launchReply, settleDoneOnLaunch, type TargetLabel } from "./dispatch-suggestion-wait.js";
+import { launchBubble, launchReply, type TargetLabel } from "./dispatch-suggestion-wait.js";
+import { launchDebtFor, settleLaunchDebt } from "./dispatch-suggestion-settle.js";
 import { deliverPendingMessages, pendingMessageRow, publishPendingMessages } from "./pending-messages.js";
 import { answerRouteFor } from "./task-answer.js";
 import { claimQuestionAnswerWithin } from "./task-question-record.js";
@@ -46,8 +48,8 @@ export type ResolveContext = {
 };
 
 export type Resolved = {
-  /** 等着的那一批这一下处理完了：问答记录、它说定的那一档、处理完那一刻的任务状态。 */
-  closed: { record: QuestionRecord; wait: Exclude<DispatchWait, "none">; status: string } | null;
+  /** 等着的那一批这一下处理完了：问答记录、它说定的那一档。 */
+  closed: { record: QuestionRecord; wait: Exclude<DispatchWait, "none"> } | null;
 };
 
 const busy = (status: string) => status === "running" || status === "queued";
@@ -122,7 +124,8 @@ export async function resolveWithin(
     question: row.question, questionOptions: null, questionItems: null, id: nanoid(12), answeredAt: at,
     answer: launchBubble(settled, order, context.proposed, context.label),
     reply: launchReply(settled, order, context.label, settleDone),
-    ...(settleDone ? { undelivered: true as const } : {}),
+    ...(settled.some((item) => item.settled.task) ? { dispatchLaunch: true as const } : {}),
+    ...(settleDone ? { undelivered: true as const, settleOwed: launchDebtFor(row) } : {}),
   };
   const remaining = next.filter((item) => item.wait === "none");
   if (!await claimQuestionAnswerWithin(transaction, row, record, undefined, remaining)) {
@@ -134,10 +137,10 @@ export async function resolveWithin(
       taskId, text: record.reply, ...delivery.route, ownerUserId: context.owner, answerId: record.id, execution: !delivery.sideways,
     }));
   }
-  return { closed: { record, wait, status: row.status } };
+  return { closed: { record, wait } };
 }
 
-/** 提交之后：让人看见（框顶、问答记录），done 结成完成，continue 催一下待发送答复。各自兜底，都不改变「已经了结」。 */
+/** 提交之后：让人看见（框顶、问答记录），done 还一次欠下的收尾，continue 催一下待发送答复。各自兜底，都不改变「已经了结」。 */
 export function afterResolved(taskId: string, resolved: Resolved, what: string): void {
   const settle = (step: string, work: () => unknown) => {
     void Promise.resolve().then(work).catch((error) => console.error(`[navi] ${what}之后${step}出错 ${taskId}:`, error));
@@ -151,6 +154,6 @@ export function afterResolved(taskId: string, resolved: Resolved, what: string):
   }
   settle("广播框顶", () => publishTaskUpdated(taskId));
   if (!closed) return;
-  if (closed.wait === "done") settle("结成完成", () => settleDoneOnLaunch(taskId, closed.status));
+  if (closed.wait === "done") settle("收尾", () => settleLaunchDebt(taskId));
   else settle("送答复", () => { publishPendingMessages(taskId); return deliverPendingMessages(taskId); });
 }

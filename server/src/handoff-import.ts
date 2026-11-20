@@ -46,6 +46,7 @@ import { importWaitOwnership, manifestCarriesReview } from "./handoff-wait.js";
 import { collectGateRuns, replaceGateRuns, returningAcceptanceId } from "./handoff-accept-gate.js";
 import { newHumanGate } from "./task-human-gate.js";
 import { checkCarriedPrerequisites, landedSuggestionColumns, returnedSuggestionColumns } from "./handoff-suggestions.js";
+import { questionHistoryWithoutDebt } from "./dispatch-suggestion-settle.js";
 
 export interface HandoffImportResult {
   ok: true;
@@ -385,7 +386,8 @@ async function importValidated(
     question: m.task.question,
     questionOptions: jsonOr(m.task.questionOptions, "") || null,
     questionItems: jsonOr(m.task.questionItems, "") || null,
-    questionHistory: jsonOr(m.task.questionHistory, "") || null,
+    // 派出去就算完成的欠账不随过来：那份授权属于源机上派出那一刻的局面（dispatch-suggestion-settle.ts）。
+    questionHistory: questionHistoryWithoutDebt(jsonOr(m.task.questionHistory, "") || null),
     // 验收落账随任务走(老 manifest 没有这几个字段,按缺失处理)。尾段进度位与
     // 「不提交那一档的索引指纹」不带,理由见 handoff-types.ts。
     acceptedTargetBranch: m.task.acceptedTargetBranch ?? null,

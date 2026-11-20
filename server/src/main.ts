@@ -283,6 +283,9 @@ async function initializeServer() {
     // 的那几条要先占上锁。排在审查对账之后：前置站没站稳要看审查链收拾完的现场。
     const { startPrerequisiteLaunches } = await import("./prerequisite-launch.js");
     await startPrerequisiteLaunches().catch((err) => console.error("[navi] 等齐就起补办失败（不影响启动）:", err));
+    // 派出去就算完成还欠着的收尾（dispatch-suggestion-settle.ts）：排在接回之后，在跑的回合先占上锁。
+    const { startLaunchDebtSweeps } = await import("./dispatch-suggestion-settle.js");
+    await startLaunchDebtSweeps().catch((err) => console.error("[navi] 派出去之后的收尾补办失败（不影响启动，每分钟再扫）:", err));
   }
   // navi MCP 登记自检。放在这里是因为它跟任务能不能交卷直接相关：缺了它 agent 干完活
   // 也记 failed，而这一趟能在第一个任务起跑之前就说出来。两档各做一件事：隔离档的目录

@@ -136,14 +136,21 @@ export function suggestionTaskBody(body: string, extra?: string | null): string 
 }
 
 /**
- * 等着的那一批处理完时交给智能体的那段话（server dispatch-suggestion-wait.ts `launchReply`）以它开头。那段话只是
- * 回执：用户在会话里看到的是每条新任务各一句「开了新任务」（web dispatchNotes.ts），所以会话里认出这段就不再
- * 画成一颗「你」的气泡。
+ * 等着的那一批处理完、建了任务时交给智能体的那段话（server dispatch-suggestion-wait.ts `launchReply`）以它开头。
+ * 那段话只是回执：用户在会话里看到的是每条新任务各一句「开了新任务」（web dispatchNotes.ts），所以会话里认出
+ * 这一问就不再画成一颗「你」的气泡。
  */
 export const DISPATCH_LAUNCH_REPLY_LEAD = "用户按了「派出去」：";
 
-export function isDispatchLaunchReply(text: string): boolean {
-  return text.trimStart().replace(/^【答复】\s*/, "").startsWith(DISPATCH_LAUNCH_REPLY_LEAD);
+/**
+ * 这条问答记录是不是派出去那一下留下的。认结构化标记（`dispatchLaunch`）；没有标记的老记录只认派出那一下的
+ * 完整形状——用户答的那一句是「派出这 N 个任务」开头、交给智能体的那段是派出回执开头——用户自己在普通问答
+ * 里贴一段回执，`answer` 是他贴的原文，对不上。
+ */
+export function isDispatchLaunchRecord(record: { answer?: string; reply?: string; dispatchLaunch?: true }): boolean {
+  if (record.dispatchLaunch) return true;
+  return /^派出这 \d+ 个任务\n/.test(record.answer ?? "")
+    && (record.reply ?? "").replace(/^【答复】\s*/, "").startsWith(DISPATCH_LAUNCH_REPLY_LEAD);
 }
 
 const stringList = (value: unknown): string[] | undefined =>
