@@ -11,6 +11,7 @@ import { eq } from "drizzle-orm";
 import { spawnTestFixture } from "../../scripts/test-process-scope.mjs";
 import { withTestResources } from "../../scripts/test-process-resources.mjs";
 
+process.env.NAVI_LAX_DONE = "1";
 const empty: RestartImpact = { survives: [], resumes: [], interrupted: [], mcpDisrupted: [] };
 const owner = claimOwnTurn("survivor");
 assert.ok(owner);
@@ -129,7 +130,8 @@ if (process.platform === "darwin") {
   } finally { rmSync(home, { recursive: true, force: true }); }
 }
 
-process.env.NAVI_LAX_DONE = "1";
+const { STRICT_DONE_PROTOCOL } = await import("../src/settle-status.js");
+assert.equal(STRICT_DONE_PROTOCOL, false, "the detached fixture must initialize lax completion before loading production modules");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { tasks, projects, sessions } = await import("../src/db/schema.js");
 const { reattachRunningTasks, restartImpact } = await import("../src/reattach.js");
