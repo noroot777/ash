@@ -6,7 +6,8 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 // ① 打开之后那一格是宽格、自带头带，会话和回复框原样在、打得进字；
 // ② 嵌着的页面在面板里，放大才铺满窗口，还原回到面板、页面不重载；
 // ③ 切去别的格、收起右侧面板再回来：还是原来那一份页面（不重载、页里没提交的输入还在）；
-// ④ 会话里点开审查报告：从左边推出，会话和回复框不被盖住、照样点得到；
+// ④ 会话里点开审查报告：从左边推出，会话和回复框不被盖住、照样点得到——窗口一路缩窄也一样：
+//    主区够宽并排，窄了报告改排到头部下面、会话上面；
 // ⑤ 关掉回到那一格的空态，面板回到普通宽度，会话一直在。
 // 设 SHOT=<目录> 可以顺带截图自查版式。
 
@@ -121,6 +122,40 @@ try {
   await reply.fill("读着报告接着说");
   assert.equal(await reply.inputValue(), "读着报告接着说");
   assert.equal(await workspace.count(), 1, "报告开着时预览指正照旧在右边");
+  // 量的是主区不是窗口：右边开着宽格，921px 的窗口里主区已经窄到要上下摆。窄到右侧面板自己改成
+  // 盖在内容上（≤720px）那一档，缩过去之前先把面板收起来——那是面板的形态，不是报告盖的。
+  const header = page.locator(".task-detail-header");
+  for (const width of [921, 920, 900, 760, 640, 420]) {
+    if (width <= 720 && await inspector.isVisible()) { // 缩过去之后面板就把这颗键也盖住了，先收
+      await button("开合右侧面板").click();
+      await inspector.waitFor({ state: "hidden" });
+    }
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(350); // 并排→上下时让出来的那一段有 260ms 的过渡
+    assert.ok(await hitsSelf(reply), `${width}px：报告开着，回复框没被盖住`);
+    assert.ok(await hitsSelf(conversation), `${width}px：报告开着，会话没被盖住`);
+    await reply.fill(`${width}px 读着报告说`);
+    assert.equal(await reply.inputValue(), `${width}px 读着报告说`);
+    const mainWidth = (await page.locator(".task-detail").boundingBox()).width;
+    const box = await report.boundingBox(), talk = await conversation.boundingBox();
+    if (mainWidth >= 560) {
+      assert.ok(talk.x >= box.x + box.width - 1, `${width}px：主区 ${mainWidth}px 够宽，并排`);
+    } else {
+      const head = await header.boundingBox();
+      assert.ok(box.y >= head.y + head.height - 1 && talk.y >= box.y + box.height - 1, `${width}px：主区 ${mainWidth}px 太窄，报告排在头部下面、会话上面`);
+      assert.ok(box.height > 200 && box.width >= mainWidth - 1, `${width}px：上下摆时报告占满主区宽、有正经的高度`);
+    }
+    assert.ok(await report.getByRole("heading", { name: "第 1 轮审查报告" }).isVisible(), `${width}px：报告照样看得见`);
+  }
+  if (process.env.SHOT) await page.screenshot({ path: `${process.env.SHOT}/preview-tab-report-narrow.png` });
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await button("开合右侧面板").click();
+  await iframe.waitFor();
+  assert.equal(iframeLoads, loads, "缩窄、收起面板再放宽，预览页面不重载");
+  await page.waitForTimeout(350);
+  const wideAgain = await report.boundingBox();
+  assert.ok((await conversation.boundingBox()).x >= wideAgain.x + wideAgain.width - 1, "放宽回来又并排");
+  await reply.fill("读着报告接着说");
   await report.getByRole("button", { name: "关闭审查报告" }).click();
   await report.waitFor({ state: "detached" });
 

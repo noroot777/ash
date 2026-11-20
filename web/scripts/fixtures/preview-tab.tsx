@@ -50,7 +50,8 @@ function Fixture() {
             <InspectorHost contextKey="preview-tab-fixture" context={context} descriptors={inspectors}>
               {({ toggle }) => (
                 <div className="task-detail">
-                  <section id="fixture-main" style={{ display: "flex", flex: 1, flexDirection: "column", gap: 8, padding: 16 }}>
+                  <header className="task-detail-header">任务头</header>
+                  <section id="fixture-main" style={{ display: "flex", minHeight: 0, flex: 1, flexDirection: "column", gap: 8, padding: 16 }}>
                     <p data-testid="conversation" style={{ color: "var(--faint)" }}>会话</p>
                     <MarkdownBody text={REPORT} />
                     <div style={{ flex: 1 }} />

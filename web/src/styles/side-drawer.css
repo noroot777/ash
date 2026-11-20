@@ -25,18 +25,24 @@
 @media (max-width: 920px) {
   .side-drawer { width: min(720px,92%); }
 }
-/* 读全文那一屉（报告、辩论记录）：一边读一边要接着看会话、在回复框里说话，所以够宽时不盖——
-   不画遮罩，主区（`.task-detail` / `.team-view`）左边让出抽屉那么宽，会话和回复框整个挪到右边。
-   收起动画一开始就把位置还回去。窄屏照旧盖在上面（跟别的抽屉一样），那里挤出来的会话没法用。 */
-@media (min-width: 921px) {
-  /* 宽度跟下面让出来的那一段是同一个式子：主区撑满它的父级，两处的百分比量的是同一个宽度。 */
-  .side-drawer--reading { width: min(560px, 50%); box-shadow: none; }
-  .side-drawer-scrim--reading { display: none; }
-  .task-detail,
-  .team-view { transition: padding-left 260ms cubic-bezier(.22,1,.36,1); }
-  .task-detail:has(> .side-drawer--reading:not(.is-closing)),
-  .team-view:has(> .side-drawer--reading:not(.is-closing)) { padding-left: min(560px, 50%); }
-}
+/* 读全文那一屉（报告、辩论记录）：一边读一边要接着看会话、在回复框里说话，所以在哪种宽度下都不盖——
+   不画遮罩，主区（`.task-detail` / `.team-view`）把抽屉那一块让出来。按主区自己有多宽分两种摆法
+   （SideDrawer.tsx 量主区，不看窗口：右侧面板开着宽格时，宽窗口里的主区也可能很窄）：
+   - 并排：主区左边让出抽屉那么宽，会话和回复框整个挪到右边；
+   - 上下（is-stacked）：并排各自窄得没法读，抽屉改成主区里的一行，排在头部下面、会话上面，
+     会话和回复框在下半截照常能用。
+   收起动画一开始就把位置还回去。 */
+.side-drawer-scrim--reading { display: none; }
+/* 宽度跟下面让出来的那一段是同一个式子：主区撑满它的父级，两处的百分比量的是同一个宽度。 */
+.side-drawer--reading { width: min(560px, 50%); box-shadow: none; }
+.task-detail,
+.team-view { transition: padding-left 260ms cubic-bezier(.22,1,.36,1); }
+.task-detail:has(> .side-drawer--reading:not(.is-stacked, .is-closing)),
+.team-view:has(> .side-drawer--reading:not(.is-stacked, .is-closing)) { padding-left: min(560px, 50%); }
+/* 上下摆时它是主区里的一行（不再 absolute）；层级照旧，窄屏右侧面板盖在内容上时它仍在面板上面。 */
+:is(.task-detail, .team-view) > .side-drawer--reading.is-stacked { position: relative; order: -1; width: auto; flex: 0 0 50%; border-right: 0; border-bottom: 1px solid var(--line2); border-radius: 0; }
+.task-detail:has(> .side-drawer--reading.is-stacked) > :is(header, .task-origin-bar),
+.team-view:has(> .side-drawer--reading.is-stacked) > :is(header, .task-origin-bar) { order: -2; }
 /* 减少动效时整个不动画：SideDrawer.tsx 同一口径判到之后靠定时器收尾，不等 animationend。 */
 :root[data-motion="reduce"] .side-drawer,
 :root[data-motion="reduce"] .side-drawer.is-closing,
