@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { normalizeDuetConfig } from "@navi/shared/duet";
+import { taskInteractionAvailability } from "@navi/shared/task-interaction";
 import { DUET_TIMELINE_SESSION } from "@navi/shared/user-messages";
 import type { GateAction, Session, Task, TaskActions, TaskListItem } from "@navi/shared";
 import { runActivityPhase } from "@navi/shared/run-activity";
@@ -173,6 +174,7 @@ export function DuetView({
   notify: (message: string) => void;
 }) {
   const config = normalizeDuetConfig(task.duet);
+  const readOnly = taskInteractionAvailability(task) === "archived";
   // 议题里的附件块要还原成缩略图，不能把「[用户附带的文件…] - /abs/path」念给用户看。
   // 解析不出正文时**只回退到标题**：再退回 config.topic 就等于把那段原文原样贴出来
   // （只贴图不打字建的讨论正是这种，第 1 轮审查 P1）。body 与 topic 由服务端保证是
@@ -198,6 +200,7 @@ export function DuetView({
     setHandoffOpen(false);
     setDeleteOpen(false);
   }, [task.id]);
+  useEffect(() => { if (readOnly) setHandoffOpen(false); }, [readOnly]);
   useEffect(() => { void api.sessions(task.id).then(setSessions).catch(() => setSessions([])); }, [task.id, task.status]);
   const sessionsByRole = useMemo(() => latestByRole(sessions), [sessions]);
   // An unmatched persisted start means "active" only while the task itself is
@@ -266,6 +269,7 @@ export function DuetView({
     }
   };
   const gateAction = async (next: GateAction) => {
+    if (readOnly) return;
     // 闸口四个动作里只有「注入意见 / 提问」会真的再起一轮讨论 —— 放行/打回只是结算,
     // 一个 CLI 都不起,那就别拿一句「会换执行器」去打扰。
     if ((next.kind === "inject" || next.kind === "ask") && !(await confirmExecutorSwap(task.id))) return;
@@ -292,7 +296,7 @@ export function DuetView({
     catch (reason) { setTitle(task.title); notify(reason instanceof Error ? reason.message : String(reason)); }
   };
   const handoff = async (choice: HandoffChoice): Promise<boolean> => {
-    if (handoffBusy) return false;
+    if (readOnly || handoffBusy) return false;
     setHandoffBusy(true);
     let created: Task;
     try {
@@ -419,6 +423,7 @@ export function DuetView({
 
       {gate?.open && task.status === "awaiting_review" ? (
         <DuetGateControls
+          task={task}
           gate={gate}
           round={currentRound}
           maxRounds={config.maxRounds}
@@ -433,6 +438,7 @@ export function DuetView({
           <AcceptanceControls className="duet-terminal-acceptance" task={task} onTaskUpdated={onTaskUpdated} notify={notify}
             lead={<b className="acc-title">讨论结论</b>} />
           <DuetHandoffBar
+            task={task}
             linkedTasks={linkedTasks}
             busy={handoffBusy}
             onOpenHandoff={() => setHandoffOpen(true)}
@@ -442,7 +448,7 @@ export function DuetView({
       ) : (
         <DuetProgressBar round={currentRound} maxRounds={config.maxRounds} gateEnabled={config.gateG1 === "on"} />
       )}
-      {handoffOpen && <DuetHandoffModal taskId={task.id} busy={handoffBusy} onClose={() => setHandoffOpen(false)} onConfirm={handoff} />}
+      {!readOnly && handoffOpen && <DuetHandoffModal taskId={task.id} busy={handoffBusy} onClose={() => setHandoffOpen(false)} onConfirm={handoff} />}
       {deleteOpen && <DeleteTaskDialog task={task} notify={notify} onDeleted={(ids) => ids.forEach(onTaskDeleted)} onClose={() => setDeleteOpen(false)} />}
     </div>
   );

@@ -3,6 +3,7 @@ import { ArrowUUpLeft, Check, CheckCircle } from "@phosphor-icons/react";
 import type { BranchPlanView, Task, TaskListItem } from "@navi/shared";
 import { hasPendingAcceptCommit } from "@navi/shared";
 import { isFinalHumanGate } from "@navi/shared/workflow-policy";
+import { taskInteractionAvailability } from "@navi/shared/task-interaction";
 import { acceptanceSteps } from "@navi/shared/accept-message";
 import type { AcceptanceAutoCommitOutcome } from "@navi/shared/accept-workspace";
 import { api, type AcceptTaskFailure } from "../lib/api.ts";
@@ -66,7 +67,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
 }) {
   const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
   const settled = task.stage === "accepted" || task.stage === "merged";
-  const archived = !!task.archived;
+  const archived = taskInteractionAvailability(task) === "archived";
   const inFlight = task.status === "running" || task.status === "queued";
   const gate = useAcceptGate(task.id);
   const plan = useBranchPlan(task, !midGate && !settled);
@@ -91,6 +92,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
   const taskFacts = useTaskFacts(task.id, task.updatedAt);
   const retryTaskFacts = () => refreshTaskFacts(task, onTaskUpdated);
   useEffect(() => { setChecked([]); setFailure(null); setLayer(null); }, [task.id]);
+  useEffect(() => { if (archived) { setLayer(null); setEditGate(false); } }, [archived]);
   // 版本一推，前置命令那份状态（基准对照的目标分支跟着合入目标走）也重读一次。
   useEffect(() => { if (taskFacts.version) void gate.reload(); }, [taskFacts.version]);
 
@@ -309,7 +311,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
             detail={<p className="acc-detail-text">{verification.verification.message}</p>} />
         )}
       </div>
-      {confirming && (
+      {!archived && confirming && (
         <AcceptConfirm
           anchorRef={acceptRef}
           steps={shownSteps}
@@ -339,7 +341,7 @@ export function AcceptanceControls({ task, onTaskUpdated, notify, block = null, 
           onClose={() => setLayer(null)}
         />
       )}
-      {layer === "reject" && (
+      {!archived && layer === "reject" && (
         <AcceptReject task={task} anchorRef={rejectRef} onClose={() => setLayer(null)} onSent={returned} notify={notify} />
       )}
     </div>

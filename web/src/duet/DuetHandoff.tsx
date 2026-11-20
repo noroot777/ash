@@ -2,6 +2,7 @@
 // 新任务只有一种（只叫一个执行器来跑），所以这里不再挑调度者和执行者；以前接力出来的团队照旧列在这儿。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TEAM_DEFAULTS, taskDisplayStatus, type AgentExecutorProfile, type AgentType, type TaskListItem } from "@navi/shared";
+import { taskInteractionAvailability } from "@navi/shared/task-interaction";
 import { ArrowRight, ArrowSquareOut, UsersThree, Warning } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
@@ -101,17 +102,20 @@ export function DuetHandoffModal({
 }
 
 export function DuetHandoffBar({
+  task,
   linkedTasks,
   busy,
   onOpenHandoff,
   onOpenTask,
 }: {
+  task: Pick<TaskListItem, "archived">;
   /** 从这场讨论交出去落实的任务：现在建的是普通任务，以前接力出来的团队也在里面。 */
   linkedTasks: TaskListItem[];
   busy: boolean;
   onOpenHandoff: () => void;
   onOpenTask: (task: TaskListItem) => void;
 }) {
+  const readOnly = taskInteractionAvailability(task) === "archived";
   if (linkedTasks.length > 0) {
     return (
       <div className="duet-handoff-stack">
@@ -129,12 +133,13 @@ export function DuetHandoffBar({
             );
           })}
         </div>
-        <button type="button" className="duet-new-team" disabled={busy} onClick={onOpenHandoff}>
+        {!readOnly && <button type="button" className="duet-new-team" disabled={busy} onClick={onOpenHandoff}>
           <ArrowSquareOut size={13} weight="bold" />{busy ? "创建中…" : "再交一条"}
-        </button>
+        </button>}
       </div>
     );
   }
+  if (readOnly) return null;
   return (
     <div className="duet-handoff-bar">
       <div><b>把结论交给任务落实</b><small>新建一条任务，由你选的执行器接着做。</small></div>
