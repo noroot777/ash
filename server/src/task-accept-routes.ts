@@ -6,12 +6,16 @@
 import type { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { tasks } from "./db/schema.js";
+import { projects, tasks } from "./db/schema.js";
 import { acceptTask } from "./task-accept.js";
 import { mountAcceptGateRoutes } from "./accept-gate-routes.js";
 import { mountBranchPlanRoutes } from "./task-branch-routes.js";
 import { mountPendingMergeRoutes } from "./task-accept-pending.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
+import { pushDestination, pushUnavailable } from "./task-accept-push.js";
+import { rememberedPush } from "./accept-memory.js";
+import { actorOf } from "./auth/context.js";
+import type { AcceptPushView } from "@navi/shared/accept-gate";
 
 export function mountTaskAcceptanceRoutes(api: Hono): void {
   mountBranchPlanRoutes(api, acceptTask);
@@ -24,9 +28,21 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
     if (!task) return c.json({ error: "not found" }, 404);
     return c.json({ verification: await unexecutedVerification(task) });
   });
+  // 确认层「推送」那一步：推到哪、这一按推不推得了（不看「提交」那一勾，那一勾层里自己管）、上次勾没勾。只读本地，不连远程。
+  api.get("/tasks/:id/accept-push", async c => {
+    const task = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
+    const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+    if (!task || !project) return c.json({ error: "not found" }, 404);
+    const unavailable = pushUnavailable(task, project, "human", true);
+    return c.json<AcceptPushView>({
+      destination: unavailable ? null : await pushDestination(task, project),
+      unavailable,
+      remembered: await rememberedPush(actorOf(c), project.id),
+    });
+  });
   api.post("/tasks/:id/accept", async (c) => {
     const input = await c.req.json<{
-      confirmUnverified?: unknown; commit?: unknown; gate?: unknown; expectedResultVersion?: unknown; expectedHumanGate?: unknown;
+      confirmUnverified?: unknown; commit?: unknown; gate?: unknown; expectedResultVersion?: unknown; expectedHumanGate?: unknown; push?: unknown;
     }>().catch(() => null);
     // commit 只认真正的布尔：别的一律当「没传」= 跟项目设置走。含糊的真值转换在这儿
     // 就是替用户决定要不要在他的目标分支上产生提交。
@@ -40,6 +56,8 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
     const expectedHumanGate = typeof input?.expectedHumanGate === "string" ? input.expectedHumanGate : undefined;
     const result = await acceptTask(c.req.param("id"), "human", {
       confirmUnverified: input?.confirmUnverified === true, commit, acceptGate: gate, expectedResultVersion, expectedHumanGate,
+      // 推送是往外发：只认真正的 true。
+      push: input?.push === true,
     });
     if (result.accepted) return c.json(result);
     const { httpStatus, ...body } = result;

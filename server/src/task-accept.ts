@@ -14,14 +14,15 @@ import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { stopPreviewForWorktreeCleanup } from "./preview.js";
-import { finalizeAcceptance } from "./task-accept-finalize.js";
+import { acceptWithoutCleanup, finalizeAcceptance } from "./task-accept-finalize.js";
+import { preparePush, pushAfterMerge, type PushOutcome } from "./task-accept-push.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { finishAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
 import { commitAcceptanceStage, reviewAcceptanceAuthority } from "./review-acceptance.js";
 import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage } from "./task-accept-shared-workers.js";
 import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-accept-guard.js";
-import { appendTaskTimeline, alertLine, receiptLine, type TimelineLine, noticeLine } from "./task-timeline.js";
+import { appendTaskTimeline, alertLine, receiptLine, noticeLine } from "./task-timeline.js";
 import { now } from "./util.js";
 import { recordBranchReceipt } from "./task-branch-receipts.js";
 import { branchDependency, branchOwner, commitAt, dependentTasks, plannedMergeTarget } from "./task-branch-plan.js";
@@ -68,6 +69,8 @@ export type AcceptSuccess = {
    * 的时候。所以合并的结论和尾段的结论分开报，各说各的。
    */
   tail?: AcceptTail;
+  /** 这一按选了推送到远程：推没推上去（推不上去不改 accepted，见 task-accept-push.ts）。 */
+  push?: PushOutcome;
 };
 
 
@@ -86,26 +89,6 @@ const mergeLabel: Record<string, string> = {
 
 
 
-async function acceptWithoutCleanup(
-  task: typeof tasks.$inferSelect,
-  kind: AcceptSuccess["kind"],
-  message: TimelineLine,
-  authority?: ReviewAuthority,
-  basis: AcceptGateSnapshot | null = null,
-): Promise<AcceptTaskResult> {
-  const finalized = await finalizeAcceptance(task, message, false, {}, authority, basis);
-  if (finalized.failure) return finalized.failure;
-  const { sharedWorkers } = finalized;
-  return {
-    accepted: true,
-    taskId: task.id,
-    status: task.status,
-    stage: "accepted",
-    kind,
-    ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
-  };
-}
-
 async function acceptTaskUnlocked(
   taskId: string,
   by: AcceptBy,
@@ -116,6 +99,7 @@ async function acceptTaskUnlocked(
   reviewAuthority?: ReviewAuthority,
   expected: AcceptExpectation = {},
   onAutoCommit?: (outcome: AcceptanceAutoCommitOutcome) => void,
+  push = false,
 ): Promise<AcceptTaskResult> {
   const preflight = await acceptancePreflight(taskId);
   if (preflight) return preflight;
@@ -187,10 +171,14 @@ async function acceptTaskUnlocked(
     task = afterCommit.task;
     if (afterCommit.failure) return afterCommit.failure;
   }
+  // 「推送到远程」：门禁之前先把远程同步进本地目标分支（task-accept-push.ts），门禁和合并都按同步之后的判。
+  const pushing = push && gateProject ? await preparePush(task, gateProject, by, commitOverride) : null;
+  if (pushing?.failure) return pushing.failure;
+  const pushPlan = pushing?.plan ?? null;
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
     choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority, expectedResultVersion: expected.resultVersion,
-      expectedHumanGate: expected.humanGate },
+      expectedHumanGate: expected.humanGate, ...(push ? { push } : {}) },
     intent: gateIntent,
     passedRunId: gatePassedRunId,
     onBasis: basis => { gateBasis = basis; },
@@ -320,6 +308,7 @@ async function acceptTaskUnlocked(
       && !!task.acceptedMergeCommit
       && await isAncestor(project.repoPath, task.acceptedMergeCommit, targetBranch);
     if (mergeReachable) {
+      const pushed = pushPlan ? await pushAfterMerge(taskId, project.repoPath, pushPlan) : undefined;
       const guard = await acceptanceGuard(taskId, "before_accept");
       if (guard.failure) return guard.failure;
       const finalized = await finalizeAcceptance(
@@ -342,6 +331,7 @@ async function acceptTaskUnlocked(
         merge: "already_merged",
         branch: merge.sourceBranch,
         branchDeleted: true,
+        ...(pushed ? { push: pushed } : {}),
         ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
       };
     }
@@ -443,6 +433,8 @@ async function acceptTaskUnlocked(
   for (const warning of merge.warnings ?? []) {
     await appendTaskTimeline(taskId, alertLine(`合并清理警告：${warning.message}`));
   }
+  const pushed = pushPlan && !tagged && !noCommit ? await pushAfterMerge(taskId, project.repoPath, pushPlan) : undefined;
+  const pushField = pushed ? { push: pushed } : {};
   const completedMerge = tagged ? undefined : { targetBranch: merge.targetBranch, commit: noCommit ? null : merge.afterCommit ?? null };
   const completedTag = tagged ? merge.tag : undefined;
   const completedSummary = noCommit
@@ -462,6 +454,7 @@ async function acceptTaskUnlocked(
       sourceBranch: merge.sourceBranch,
       targetBranch: merge.targetBranch,
       warnings: merge.warnings,
+      ...pushField,
     };
   }
 
@@ -499,7 +492,7 @@ async function acceptTaskUnlocked(
     catch (failure) {
       const error = `${completedSummary}${failure instanceof Error ? failure.message : String(failure)}`;
       await appendTaskTimeline(taskId, alertLine(error));
-      return { accepted: false, httpStatus: 409, taskId, reason: "preview_cleanup_pending", error, completedMerge, completedTag, status: task.status, phase: "before_cleanup" };
+      return { accepted: false, httpStatus: 409, taskId, reason: "preview_cleanup_pending", error, completedMerge, completedTag, status: task.status, phase: "before_cleanup", ...pushField };
     }
   }
   const cleanup = await cleanupAcceptedTask(project.repoPath, taskId, merge.targetBranch, cleanPlan);
@@ -525,6 +518,7 @@ async function acceptTaskUnlocked(
       worktreePath: cleanup.worktreePath,
       dirtyFiles: cleanup.dirtyFiles,
       warnings: merge.warnings,
+      ...pushField,
     };
   }
 
@@ -551,7 +545,7 @@ async function acceptTaskUnlocked(
     { completedMerge, completedTag },
     reviewAuthority,
   );
-  if (finalized.failure) return finalized.failure;
+  if (finalized.failure) return { ...finalized.failure, ...pushField };
   const { sharedWorkers } = finalized;
   return {
     accepted: true,
@@ -567,6 +561,7 @@ async function acceptTaskUnlocked(
     branch: cleanup.sourceBranch,
     branchDeleted: cleanup.branchDeleted,
     warnings: merge.warnings,
+    ...pushField,
     ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
   };
 }
@@ -591,6 +586,8 @@ export async function acceptTask(
     expectedResultVersion?: string;
     /** 调用方看到的那一道「等我点头」（task-human-gate.ts）；线已经不停在那一道就拒绝。不传 = 不核。 */
     expectedHumanGate?: string;
+    /** 合完推送到目标分支的远程（task-accept-push.ts）。只认明说的 true，不读任何默认。 */
+    push?: boolean;
   } = {},
 ): Promise<AcceptTaskResult> {
   const originalFinalizer = !!advanceOpts.reviewAuthority?.finalization && !advanceOpts.acceptGatePassedRunId;
@@ -651,6 +648,7 @@ export async function acceptTask(
             advanceOpts.reviewAuthority,
             { resultVersion: advanceOpts.expectedResultVersion, humanGate: advanceOpts.expectedHumanGate },
             outcome => { autoCommit = outcome; },
+            advanceOpts.push === true,
           );
         });
       }

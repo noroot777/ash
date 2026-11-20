@@ -37,7 +37,7 @@ import type {
   TaskWorkspaceDiscardResult,
 } from "@navi/shared";
 
-import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult } from "@navi/shared/accept-gate";
+import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult, AcceptPushView } from "@navi/shared/accept-gate";
 import type { BaseUpdateRecovery } from "@navi/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@navi/shared/workflow";
 import type { CliHostEnv } from "@navi/shared/cli-overrides";
@@ -437,12 +437,15 @@ export const api = {
     // 对验收前置命令的额外指令：rerun=这一按就重跑一遍，skip=这一次不跑直接合。
     // 不传 = 照常（有现成结果就沿用，没有就跑一遍）。
     gate?: "skip" | "rerun",
+    // 合完推到目标分支的远程（先同步远程、不强推，server/src/task-accept-push.ts）。不传 = 不推。
+    push?: boolean,
   ): Promise<AcceptTaskResult> => {
-    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified, commit, gate }));
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified, commit, gate, push }));
     const body = await parseBody(response);
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
   },
+  acceptPush: (taskId: string, signal?: AbortSignal): Promise<AcceptPushView> => request(`/tasks/${id(taskId)}/accept-push`, { signal }),
   // 确认层点确认时记下这一次怎么勾的（按人按项目；「提交」写回项目设置，要管理权限）。
   rememberAccept: (projectId: string, write: AcceptMemoryWrite, signal?: AbortSignal): Promise<AcceptMemoryWriteResult> =>
     request(`/accept-memory/${id(projectId)}`, { ...json("PUT", write), signal }),

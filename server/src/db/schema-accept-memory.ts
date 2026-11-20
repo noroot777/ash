@@ -1,5 +1,5 @@
 // ── 验收确认层「运行前置命令」那一勾上次的样子：按人、按项目各记一份 ─────────────────────
-// 一行 = 这个人在这个项目里**上一次真的确认验收**时，有没有取消「运行」（skip_gate）。只有确认层
+// 一行 = 这个人在这个项目里**上一次真的确认验收**时，有没有取消「运行」（skip_gate）、有没有勾「推送」（push）。只有确认层
 // 写它（server/src/accept-memory.ts），也只有确认层读它（经门禁状态带出去）：智能体调 accept_task、
 // 飞书卡片、手机端都不读 —— 没明说跳过就照常跑。
 //
@@ -20,6 +20,8 @@ export const acceptMemory = sqliteTable(
     owner: text("owner").notNull(),
     projectId: text("project_id").notNull(),
     skipGate: integer("skip_gate", { mode: "boolean" }).notNull().default(false),
+    /** 上一次确认时勾没勾「推送到远程」（task-accept-push.ts）。只管确认层的默认，/accept 不读它。 */
+    push: integer("push", { mode: "boolean" }).notNull().default(false),
     seq: integer("seq").notNull().default(0),
     updatedAt: text("updated_at").notNull(),
   },
@@ -37,7 +39,7 @@ export async function ensureAcceptMemorySchema(client: Client): Promise<void> {
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS accept_memory (
       owner TEXT NOT NULL, project_id TEXT NOT NULL,
-      skip_gate INTEGER NOT NULL DEFAULT 0, seq INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+      skip_gate INTEGER NOT NULL DEFAULT 0, push INTEGER NOT NULL DEFAULT 0, seq INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
       PRIMARY KEY (owner, project_id)
     );
     CREATE TABLE IF NOT EXISTS accept_commit_order (project_id TEXT PRIMARY KEY, seq INTEGER NOT NULL);
@@ -46,6 +48,9 @@ export async function ensureAcceptMemorySchema(client: Client): Promise<void> {
   const columns = await client.execute("PRAGMA table_info(accept_memory);");
   if (!columns.rows.some((row) => String((row as Record<string, unknown>).name) === "seq")) {
     await client.executeMultiple("ALTER TABLE accept_memory ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;");
+  }
+  if (!columns.rows.some((row) => String((row as Record<string, unknown>).name) === "push")) {
+    await client.executeMultiple("ALTER TABLE accept_memory ADD COLUMN push INTEGER NOT NULL DEFAULT 0;");
   }
   const top = await client.execute(
     "SELECT max(seq) AS seq FROM (SELECT seq FROM accept_memory UNION ALL SELECT seq FROM accept_commit_order);");

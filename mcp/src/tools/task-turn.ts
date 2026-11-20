@@ -132,10 +132,11 @@ server.registerTool(
       confirmUnverified: z.boolean().optional().describe("返回 verify_not_run 时，只有用户知晓「独立验证尚未执行」且明确确认继续验收后才传 true；中途 human 关口会继续推进后续 verify，无需此参数"),
       gate: z.enum(["skip", "rerun"]).optional().describe("对「验收前置命令」的额外指令。不传 = 照常（跑过就沿用结果）；rerun = 这一按重跑；skip = 这次不跑直接合并。**只有用户明确要求才传**：跳过等于绕开他自己设的那道闸"),
       commit: z.boolean().optional().describe("这次合并落不落提交。不传 = 按项目设置（默认落）；false = 只把改动合进目标分支工作区并暂存、提交历史不动（要求目标分支正检出在项目目录且工作区干净，任务分支一律保留）。只有用户明确说「先别提交」才传"),
+      push: z.boolean().optional().describe("合完把目标分支推到它的远程（不强推）。合并前会先把远程的新提交快进进本地目标分支，跟任务撞冲突时照常交回任务去解。不传 = 不推。只有用户明确说「推送 / 推到远程」才传 true"),
     },
   },
-  async ({ taskId, confirmUnverified, commit, gate }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/accept`, { confirmUnverified, commit, gate })); }
+  async ({ taskId, confirmUnverified, commit, gate, push }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/accept`, { confirmUnverified, commit, gate, push })); }
     catch (e) { return fail(e); }
   },
 );

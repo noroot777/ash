@@ -291,6 +291,22 @@ export type AcceptGateState = {
  * 验收确认层点确认时送去记住的那两勾(server accept-memory.ts)。只送这一按真做了选择的那几项:
  * 有一次还作数的通过时「运行」默认是沿用、勾上是一次性重跑,都不送 skipGate。
  */
-export type AcceptMemoryWrite = { skipGate?: boolean; commit?: boolean };
+export type AcceptMemoryWrite = { skipGate?: boolean; commit?: boolean; push?: boolean };
 /** 写完之后的样子;commitSaved=false = 没有项目管理权限,「提交」只管了这一次。 */
-export type AcceptMemoryWriteResult = { skipGate: boolean; commit: boolean; commitSaved: boolean };
+export type AcceptMemoryWriteResult = { skipGate: boolean; commit: boolean; commitSaved: boolean; push: boolean };
+
+/**
+ * 验收确认层「推送」那一步要的事实（GET /tasks/:id/accept-push，只读本地不连远程）。
+ * destination = 推到哪；null 时 unavailable 说为什么（不合并、只打标签、没有远程、目标是别的任务分支…）。
+ * remembered = 这个人在这个项目里上一次确认时勾没勾它（server/src/accept-memory.ts）。
+ */
+export type AcceptPushView = {
+  destination: { branch: string; remote: string; remoteBranch: string } | null;
+  unavailable: string | null;
+  remembered: boolean;
+};
+
+/** 选了推送时，合完那一下推没推上去（server/src/task-accept-push.ts）。推不上去不改「已验收」。 */
+export type AcceptPushOutcome =
+  | { ok: true; remote: string; remoteBranch: string; commit: string; upToDate: boolean }
+  | { ok: false; remote: string; remoteBranch: string; reason: "push_rejected" | "push_failed"; message: string };
