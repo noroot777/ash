@@ -127,7 +127,7 @@ extension AppDelegate: NSMenuItemValidation {
     if item.action == #selector(installPendingUpdate(_:)) {
       let gate = UpdateGate.shared
       item.isHidden = !gate.hasPending
-      item.title = gate.phase == .waiting ? "等任务跑完后安装更新…" : "安装更新…"
+      item.title = gate.pendingMenuTitle
       return gate.hasPending
     }
     return true

@@ -127,7 +127,7 @@ enum ServerShutdown {
   }
 
   /// `target` 为 nil：用户在「确认不了」时点了「现在」—— 停那时候端口上自己那份，认不出是谁就不停。
-  static func stop(expecting target: ServiceTarget?, timeout: TimeInterval = 20) -> Result {
+  static func stop(expecting target: ServiceTarget?, timeout: TimeInterval = 20, identity: NaviInstance? = nil) -> Result {
     if target == .remote { return .stopped(nil) }
     switch NaviHealth.probeSync() {
     case .down:
@@ -143,6 +143,12 @@ enum ServerShutdown {
       if case .ours = target { return .changed("端口上换成了别的 Navi") }
       return .stopped(nil)
     case .navi(let instance):
+      if let identity {
+        guard instance.id == identity.id, instance.pid == identity.pid,
+              instance.codeDir == identity.codeDir, instance.dataDir == identity.dataDir else {
+          return .changed("确认后服务身份发生变化，未强制切换")
+        }
+      }
       guard let pid = instance.pid, pid > 1 else { return .failed("服务没报自己的进程号，没法让它下线。") }
       if let target, target != .ours(pid: pid) { return .changed("服务换了一份（进程 \(pid)）") }
       guard let pid32 = Int32(exactly: pid) else { return .failed("服务的进程号不对：\(pid)") }

@@ -61,6 +61,21 @@ enum ImpactVerdict {
 }
 
 enum RestartImpactProbe {
+  struct RecoveryAssessment {
+    let instance: NaviInstance
+    let target: ServiceTarget
+    let verdict: ImpactVerdict
+  }
+
+  static func assessRecoverySync() throws -> RecoveryAssessment {
+    guard NaviConfig.isLocal, case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs,
+          let pid = instance.pid, pid > 1, let runtime = instance.codeDir, RuntimeStore.managed(runtime) else {
+      throw RuntimeStore.Failure("无法确认本机旧服务的身份，未强制切换；旧服务和任务保持原样。")
+    }
+    return RecoveryAssessment(instance: instance, target: .ours(pid: pid),
+      verdict: askImpact(of: .ours(pid: pid), instance: instance.id, runtime: nil, recovery: true))
+  }
+
   /// 只在后台队列上调。
   static func assessSync(forRuntimeSwitch: Bool = false) -> ImpactVerdict {
     guard NaviConfig.isLocal else { return .clear(.remote) }
@@ -83,7 +98,7 @@ enum RestartImpactProbe {
 
   /// 带着认过的那一份的实例号问：问到之前端口换了人，新来的那份不答（server/src/instance-binding.ts），
   /// 闸拿不到别人的名单。
-  private static func askImpact(of target: ServiceTarget, instance: String?, runtime: String?) -> ImpactVerdict {
+  private static func askImpact(of target: ServiceTarget, instance: String?, runtime: String?, recovery: Bool = false) -> ImpactVerdict {
     var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/restart-impact"), timeoutInterval: 8)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     // 与 restart.mjs 同一张凭证：单实例锁里那串 token（文件 0600）。本机直连多半用不上，带着不吃亏。
@@ -98,6 +113,15 @@ enum RestartImpactProbe {
       guard status == 200, let data else { verdict = .unknown("服务端回 \(status)"); return }
       guard let impact = try? JSONDecoder().decode(RestartImpact.self, from: data) else {
         verdict = .unknown("答复看不懂（服务端版本太旧？）")
+        return
+      }
+      if recovery {
+        var seen = Set<String>()
+        let affected = (impact.interrupted + impact.resumes + impact.survives + impact.mcpDisrupted
+          + (impact.runtimeHandoff?.blocked ?? [])).filter { seen.insert($0.id).inserted }
+        verdict = affected.isEmpty ? .clear(target) : .disrupts(target, affected.map {
+          ($0.title, $0.reason ?? "强制切换不保证接管，任务或 MCP 交卷可能中断")
+        })
         return
       }
       var disrupted = impact.disrupted
