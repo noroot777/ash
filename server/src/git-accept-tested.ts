@@ -27,6 +27,7 @@ import { type PathState, type SealedMove, sealedMove } from "./git-accept-publis
 import { execFileText as exec } from "./exec.js";
 import { gitError } from "./git.js";
 import { registeredCheckout } from "./git-worktree-state.js";
+import { type HeldCheckout, holdCheckout, withHoldWarning } from "./git-merge-locked.js";
 import type { TaskMergeResult } from "./git-accept.js";
 
 /** 验收移动目标分支时写进 reflog 的说明开头（后面接来源分支）。没有读取方，只给人翻 reflog 时看。 */
@@ -93,20 +94,31 @@ export async function guardedDirtyFiles(repo: string): Promise<string[]> {
 }
 
 /**
- * 在封好的环境里把目标检出从被测的目标提交改成 `to`（git-accept-publish.ts）。`publish` 是挪分支那一步
- * （演过两树合并之后、写文件之前做）。成功返回 null。
+ * 持住目标检出（git-merge-locked.ts holdCheckout：两把锁 + 私有 HEAD，核过 HEAD 指着目标分支、在被测的目标提交上）
+ * 再跑 `fn`：落地和落地之后的核对都在持住的期间做，核到的就是刚落下的样子，不会被放锁之后别人切走搅乱。
  */
-async function sealedLanding(cwd: string, guard: LandingGuard, names: Names, to: string,
-  publish?: () => Promise<string | null>): Promise<TaskMergeResult | null> {
+async function heldLanding(cwd: string, guard: LandingGuard, names: Names,
+  fn: (held: HeldCheckout) => Promise<TaskMergeResult>): Promise<TaskMergeResult> {
+  const outcome = await holdCheckout(cwd, names.targetBranch, guard.target, fn)
+    .catch((error: unknown) => ({ held: false as const, stage: "failed" as const, message: gitError(error) }));
+  if (outcome.held) return withHoldWarning(outcome.value, outcome.warning);
+  return refusal(names, `${outcome.message}，这次没有合并，目标分支和检出里的文件都没动。${outcome.stage === "moved" ? "重新验收即可。" : "处理完再重新验收。"}`);
+}
+
+/**
+ * 在封好的环境里把持住的目标检出从被测的目标提交改成 `to`（git-accept-publish.ts）。`publish` 是挪分支那一步
+ * （演过两树合并之后、写文件之前做，拿到私有 HEAD 的 git 目录）。成功返回 null。
+ */
+async function sealedLanding(held: HeldCheckout, cwd: string, guard: LandingGuard, names: Names, to: string,
+  publish?: (gitDir: string) => Promise<string | null>): Promise<TaskMergeResult | null> {
   const settings = await checkoutSettings(cwd);
   if (!guard.physical?.materialization || materializationIdentity(settings) !== guard.physical.materialization) {
     return refusal(names, `目标检出的换行 / 链接配置（core.autocrlf / core.eol / core.symlinks）和门禁测的时候不是同一份了，`
       + "照现在的配置写出来的文件就不是测过的那份，所以这次没有合并，目标分支没动。重新验收会按现在的配置重新跑门禁。");
   }
-  const moved = await sealedMove(cwd, settings, names.targetBranch, guard.target, to, guard.tree, publish)
+  const moved = await sealedMove(held, cwd, settings, guard.target, to, guard.tree, publish)
     .catch((error: unknown): SealedMove => ({ ok: false, stage: "blocked", message: gitError(error) }));
   if (moved.ok) return null;
-  if (moved.stage === "locked") return refusal(names, `${moved.message}，目标分支和工作区都没动。处理完再重新验收。`);
   if (moved.stage === "publish") return refusal(names, `${moved.message}检出里的文件也一个都没动。`);
   if (moved.stage === "blocked") {
     return refusal(names, `没能把测过的改动写进 ${cwd}（${moved.message}），失败在写任何文件之前：目标分支没动，检出里的文件也没动。处理完再重新验收。`);
@@ -190,25 +202,28 @@ export async function publishInCheckout(cwd: string, method: Published, guard: L
   names: Names): Promise<TaskMergeResult> {
   const head = await rev(cwd, "HEAD");
   if (head !== guard.target) return refusal(names, movedTarget(names.targetBranch, guard.target, head));
-  const untested = await untestedCheckout(cwd, guard, names);
-  if (untested) return untested;
-  const branch = `refs/heads/${names.targetBranch}`;
-  const failed = await sealedLanding(cwd, guard, names, result, async () => {
-    try {
-      await landingGit(cwd, ["update-ref", "-m", `${ACCEPT_REFLOG_PREFIX} ${names.sourceBranch}`, branch, result, guard.target]);
-      return null;
-    } catch {
-      return movedTarget(names.targetBranch, guard.target, await rev(cwd, branch));
+  return heldLanding(cwd, guard, names, async (held) => {
+    const untested = await untestedCheckout(cwd, guard, names);
+    if (untested) return untested;
+    const branch = `refs/heads/${names.targetBranch}`;
+    // 经私有 HEAD 挪（它指着目标分支）：项目的 HEAD.lock 在我们手里，挪的只可能是目标分支。
+    const failed = await sealedLanding(held, cwd, guard, names, result, async (gitDir) => {
+      try {
+        await landingGit(cwd, ["--git-dir", gitDir, "update-ref", "-m", `${ACCEPT_REFLOG_PREFIX} ${names.sourceBranch}`, branch, result, guard.target]);
+        return null;
+      } catch {
+        return movedTarget(names.targetBranch, guard.target, await rev(cwd, branch));
+      }
+    });
+    if (failed) return failed;
+    const [now, ref, tree] = await Promise.all([rev(cwd, "HEAD"), rev(cwd, branch), rev(cwd, "HEAD^{tree}")]);
+    if (now !== result || ref !== result || tree !== guard.tree) {
+      return refusal(names, `快进之后目标分支 ${names.targetBranch} 不在刚发布的测过的结果 ${result.slice(0, 12)} 上`
+        + `（现在在 ${(ref ?? "读不到").slice(0, 12)}，有别的程序同时动了它），所以这次不算验收通过。Navi 没有去动它现在的提交，请核对后重新验收。`);
     }
+    return await landedUntested(cwd, guard, names, `目标分支 ${names.targetBranch} 已经快进到测过的结果 ${result.slice(0, 12)}`)
+      ?? { ok: true, ...names, method };
   });
-  if (failed) return failed;
-  const [now, ref, tree] = await Promise.all([rev(cwd, "HEAD"), rev(cwd, branch), rev(cwd, "HEAD^{tree}")]);
-  if (now !== result || ref !== result || tree !== guard.tree) {
-    return refusal(names, `快进之后目标分支 ${names.targetBranch} 不在刚发布的测过的结果 ${result.slice(0, 12)} 上`
-      + `（现在在 ${(ref ?? "读不到").slice(0, 12)}，有别的程序同时动了它），所以这次不算验收通过。Navi 没有去动它现在的提交，请核对后重新验收。`);
-  }
-  return await landedUntested(cwd, guard, names, `目标分支 ${names.targetBranch} 已经快进到测过的结果 ${result.slice(0, 12)}`)
-    ?? { ok: true, ...names, method };
 }
 
 /**
@@ -240,15 +255,17 @@ export async function publishRefOnly(repo: string, method: Published, guard: Lan
 export async function stageTestedTree(cwd: string, guard: LandingGuard, names: Names): Promise<TaskMergeResult> {
   const head = await rev(cwd, "HEAD");
   if (head !== guard.target) return refusal(names, movedTarget(names.targetBranch, guard.target, head));
-  const untested = await untestedCheckout(cwd, guard, names);
-  if (untested) return untested;
-  const failed = await sealedLanding(cwd, guard, names, guard.tree);
-  if (failed) return failed;
-  const staged = (await landingGit(cwd, ["write-tree"]).catch(() => null))?.stdout.trim() ?? null;
-  if (staged !== guard.tree || await rev(cwd, "HEAD") !== guard.target) {
-    return refusal(names, `工作区里暂存的（${staged?.slice(0, 12) ?? "读不到"}）不是验收前置命令测过的那一棵（${guard.tree.slice(0, 12)}）：`
-      + "落的同时目标检出被别人动过。Navi 没有替你复位，请在那个检出里核对后用 `git reset --merge` 或手动处理，再重新验收。");
-  }
-  return await landedUntested(cwd, guard, names, "测过的改动已经落进目标检出的工作区（没有提交）")
-    ?? { ok: true, ...names, method: "no_commit", stagedTree: staged };
+  return heldLanding(cwd, guard, names, async (held) => {
+    const untested = await untestedCheckout(cwd, guard, names);
+    if (untested) return untested;
+    const failed = await sealedLanding(held, cwd, guard, names, guard.tree);
+    if (failed) return failed;
+    const staged = (await landingGit(cwd, ["write-tree"]).catch(() => null))?.stdout.trim() ?? null;
+    if (staged !== guard.tree || await rev(cwd, "HEAD") !== guard.target) {
+      return refusal(names, `工作区里暂存的（${staged?.slice(0, 12) ?? "读不到"}）不是验收前置命令测过的那一棵（${guard.tree.slice(0, 12)}）：`
+        + "落的同时目标检出被别人动过。Navi 没有替你复位，请在那个检出里核对后用 `git reset --merge` 或手动处理，再重新验收。");
+    }
+    return await landedUntested(cwd, guard, names, "测过的改动已经落进目标检出的工作区（没有提交）")
+      ?? { ok: true, ...names, method: "no_commit", stagedTree: staged };
+  });
 }

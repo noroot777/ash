@@ -120,7 +120,8 @@ export async function discardTaskWorkspace(
  *    顺着解到它指向的分支(HEAD 永远不会指着别名本身),删别名悬空不了任何检出;而拿别名去开占位 worktree,
  *    git 会把它指向的那个分支再检出一份,不拒。但「它是别名」是删之前看的,看完它可能被换成同一提交上的
  *    普通分支再被检出(审查第 1 轮 F1 实测),旧值比较只比提交、认不出类型变了 —— 所以别名用 `symref-delete
- *    <引用> <原目标>` 删:「仍是指向那个目标的别名」和「删」在同一个引用事务里,类型一变 git 就拒,不删。
+ *    <引用> <原目标>` 删,并在同一个事务里 `verify <原目标> <expected>`:「仍是指向那个目标的别名、它还在
+ *    expected 上」和「删」一起成立,类型一变或目标挪了 git 就拒,不删(与普通分支带旧值删同一个契约)。
  *  · 只删这个名字本身(`--no-deref`):不加时 update-ref 会顺着符号引用删掉它指向的分支 ——
  *    `navi/<id8>` 是指向 main 的别名时,删掉的是 main(第 2 轮审查实测)。
  *  · 删掉 `branch.<name>.*` 配置节:否则取回后同名分支重建,会沿用旧的上游等设置。
@@ -134,7 +135,7 @@ async function deleteBranchAt(repo: string, branch: string, expected: string): P
   const alias = await exec("git", ["-C", repo, "symbolic-ref", "-q", ref]).then((r) => r.stdout.trim() || null, () => null);
   let failed: unknown;
   if (alias) {
-    failed = await exec("git", ["-C", repo, "update-ref", "--no-deref", "--stdin"], { input: `symref-delete ${ref} ${alias}\n` })
+    failed = await exec("git", ["-C", repo, "update-ref", "--no-deref", "--stdin"], { input: `verify ${alias} ${expected}\nsymref-delete ${ref} ${alias}\n` })
       .then(() => null, (error: unknown) => new Error(/unknown command/i.test(gitError(error))
         ? `分支 ${branch} 是指向 ${alias} 的别名，这个 git 版本没法在一个引用事务里核对并删掉它（需要 git 2.46 以上），没有删`
         : `分支 ${branch} 删之前是指向 ${alias} 的别名，删的那一刻已经不是了（${gitError(error)}），没有删；重试会按它现在的样子重新判断`));

@@ -231,13 +231,14 @@ try {
   }
 
   // ㊱ 最终合并 · 分支刚挪到测过的结果、另一个终端紧跟着往目标分支提交（发布的后置条件，第 5 轮复审 F1）：
-  // 不报成功，那个外部提交原样留着。外部提交由一个 git 包装在真正的 update-ref 之后插进来。
+  // 不报成功，那个外部提交原样留着。外部提交由一个 git 包装在真正的 update-ref 之后插进来（发布期间项目目录的
+  // HEAD.lock 在 navi 手里，从任务工作区那份检出去挪 main）。
   {
     const sample = await fixture("landing-after-race", { baseline: "merge_preview" });
     const bin = join(root, "after-race-bin");
     mkdirSync(bin);
     const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-    const real = `'${realGit}' -C '${sample.repo}'`;
+    const real = `'${realGit}' -C '${sample.cwd}'`;
     writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" update-ref -m ${ACCEPT_REFLOG_PREFIX}"*) '${realGit}' "$@"; rc=$?\n`
       + `  c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"; exit $rc ;; esac\n`
       + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
@@ -483,7 +484,7 @@ try {
     git(sample.cwd, "commit", "-qm", "task edits the tool and adds a directory");
     const acl = process.platform === "darwin";
     if (acl) execFileSync("chmod", ["+a", `user:${userInfo().username} deny execute`, tool]);
-    const real = `GIT -C '${sample.repo}'`;
+    const real = `GIT -C '${sample.cwd}'`; // 项目目录的 HEAD.lock 在 navi 手里，从任务工作区挪 main
     const bin = wrapGit("restore-whole", ` update-ref -m ${ACCEPT_REFLOG_PREFIX}`,
       `c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"`);
     const { landed } = await withPath(bin, arm => landGuarded(sample, arm));

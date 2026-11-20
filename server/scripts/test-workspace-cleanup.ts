@@ -196,6 +196,9 @@ try {
       const branch = worktreeBranchName(taskId);
       const tip = git(repo, "rev-parse", "main");
       git(repo, "symbolic-ref", `refs/heads/${branch}`, "refs/heads/main");
+      const stale = await discardTaskWorkspace(repo, taskId, { worktree: false, branch: true, forceBranchAt: git(repo, "commit-tree", "main^{tree}", "-m", "stale") });
+      assert.equal(stale.branchDeleted, false, "别名指向的分支已经不在保存的提交上：与普通分支同一个契约，不删");
+      assert.equal(branchExists(branch), true);
       const res = await discardTaskWorkspace(repo, taskId, { worktree: false, branch: true, forceBranchAt: tip });
       assert.equal(res.branchDeleted, true, res.branchError ?? "别名应被删除");
       assert.equal(branchExists(branch), false);
