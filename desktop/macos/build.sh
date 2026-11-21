@@ -22,7 +22,7 @@ ARCH="$(node "$HERE/scripts/architecture.mjs")"
 export NAVI_MAC_ARCH="$ARCH"
 SWIFT_ARCH="${ARCH/x64/x86_64}"
 # 给人看的版本。Sparkle 比的是下面的 CFBundleVersion。
-VERSION="0.3.1"
+VERSION="0.3.2"
 # CFBundleVersion 必须严格递增：账本记着这台机器上发过的最后一个号，新号一定比它大（规则见
 # scripts/build-number.mjs）。账本放在仓库的 git 公共目录里，各个 worktree 共用一本；不在仓库里构建时
 # 退回 build/ 下。
