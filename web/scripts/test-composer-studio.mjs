@@ -57,7 +57,8 @@ try {
   const openLaunch = () => page.getByRole("button", { name: /^启动设置：/ }).click();
   const clickOutside = () => page.locator(".composer-scroll").click({ position: { x: 5, y: 5 } });
   const people = page.getByRole("button", { name: /^谁来做：/ });
-  const space = page.getByRole("button", { name: /^工作目录：/ });
+  const worktreeSwitch = page.getByRole("switch", { name: "独立 worktree" });
+  const baseButton = page.getByRole("button", { name: /^base 分支/ });
   const flow = page.getByRole("button", { name: /^如何交付：/ });
   // 发送键淡下去时「为什么发不出去」挂在它的 aria-describedby 上（指上去的提示说的也是这一句）。
   const blockedReason = () => page.locator(".studio-card .send-key-main").evaluate((element) =>
@@ -76,19 +77,27 @@ try {
 
   await page.getByRole("button", { name: /^智能体：/ }).click();
   await page.keyboard.press("Escape");
-  await space.click();
-  const directoryPanel = page.getByRole("dialog", { name: "工作目录", exact: true });
-  const worktreeSwitch = directoryPanel.getByRole("switch");
+  // 工作目录和 base 分支常驻在卡片下面：不用先点开什么就能拨、能选。
   const before = await worktreeSwitch.getAttribute("aria-checked");
-  await directoryPanel.locator(".composer-toggle-field > span").click();
-  assert.notEqual(await worktreeSwitch.getAttribute("aria-checked"), before);
-  await directoryPanel.getByRole("button", { name: /^base 分支/ }).click();
+  assert.equal(before, "false", "项目默认是项目目录");
+  assert.equal(await baseButton.count(), 0, "用项目目录时没有 base 分支可选");
+  await worktreeSwitch.click();
+  assert.equal(await worktreeSwitch.getAttribute("aria-checked"), "true");
+  await baseButton.click();
   await page.getByRole("option", { name: "develop", exact: true }).click();
-  assert.equal(await directoryPanel.isVisible(), true, "子菜单选择不能关闭父浮层");
-  assert.match(await space.getAttribute("aria-label"), /独立 worktree.*develop/);
+  assert.match(await baseButton.innerText(), /develop/);
+  assert.equal(await page.locator(".studio-popover:visible").count(), 0, "选分支不该再经过浮层");
+
+  // 浮层里的下拉选完不关浮层；Esc 才关，焦点回到入口。
+  const org = page.getByRole("button", { name: /^组织与标签：/ });
+  await org.click();
+  const orgPanel = page.getByRole("dialog", { name: "组织与标签", exact: true });
+  await orgPanel.getByRole("button", { name: /^分组/ }).click();
+  await page.getByRole("option", { name: "无分组", exact: true }).click();
+  assert.equal(await orgPanel.isVisible(), true, "子菜单选择不能关闭父浮层");
   await page.keyboard.press("Escape");
-  assert.equal(await directoryPanel.isVisible(), false);
-  assert.equal(await space.evaluate((element) => element === document.activeElement), true);
+  assert.equal(await orgPanel.isVisible(), false);
+  assert.equal(await org.evaluate((element) => element === document.activeElement), true);
 
   // 新建框只有一种任务：卡片上方没有「单任务 / 团队 / 讨论」那一排，也没有「谁来做」「如何交付」的配置浮层，
   // 更不会去拉团队预设。
@@ -107,6 +116,11 @@ try {
   await page.getByRole("button", { name: /^组织与标签：/ }).click();
   await page.getByRole("textbox", { name: "添加标签" }).fill("界面优化");
   await page.getByRole("textbox", { name: "添加标签" }).press("Enter");
+  // 标签是一枚枚横排的小块，后面紧跟着输入：组件的基础样式不能只在任务详情里才生效。
+  const chip = await page.getByRole("button", { name: "移除标签 界面优化" }).boundingBox();
+  const adder = await page.getByRole("textbox", { name: "添加标签" }).boundingBox();
+  assert(Math.abs(chip.y + chip.height / 2 - (adder.y + adder.height / 2)) < 2 && adder.x > chip.x + chip.width,
+    "标签小块和添加输入应排在同一行");
   await clickOutside();
   assert.equal(await page.locator(".studio-popover:visible").count(), 0);
   assert.match(await page.getByRole("button", { name: /^组织与标签：/ }).innerText(), /1 个标签/);
@@ -181,17 +195,17 @@ try {
   await page.reload();
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("button", { name: /^智能体：/ }).waitFor();
-  assert.match(await space.getAttribute("aria-label"), /项目目录/, "项目默认是「关」，面板该预填项目目录");
-  await space.click();
-  const workspacePanel = page.getByRole("dialog", { name: "工作目录", exact: true });
-  await workspacePanel.locator(".composer-toggle-field > span").click();
-  await workspacePanel.getByRole("button", { name: "设为本项目默认" }).click();
+  assert.equal(await worktreeSwitch.getAttribute("aria-checked"), "false", "项目默认是「关」，面板该预填项目目录");
+  const saveDefault = page.getByRole("button", { name: "设为本项目默认" });
+  assert.equal(await saveDefault.count(), 0, "跟项目默认一致时不出「设为本项目默认」");
+  await worktreeSwitch.click();
+  await saveDefault.click();
   await page.waitForFunction(() => document.querySelector('[data-testid="project-worktree-default"]')?.textContent === "开");
   assert.deepEqual(projectPatches, [{ useWorktreeDefault: true }], "只写这一位，别捎带别的字段");
-  await page.keyboard.press("Escape");
+  await saveDefault.waitFor({ state: "detached" });
   await page.getByTestId("reopen").click();
   await page.getByRole("button", { name: /^智能体：/ }).waitFor();
-  assert.match(await space.getAttribute("aria-label"), /独立 worktree/, "重开面板必须按刚设成的项目默认预填");
+  assert.equal(await worktreeSwitch.getAttribute("aria-checked"), "true", "重开面板必须按刚设成的项目默认预填");
 
   // 第 2 轮回归 A:新建分组也走统一改组联动——旧排队目标被清掉、提交被挡。
   await page.reload();

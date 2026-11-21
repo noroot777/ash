@@ -92,16 +92,14 @@
 
 /* 显式声明这一列可以被压窄。默认的隐式列是 `auto`（min-width: auto），一旦里面
    有长模型名，整栏就会被 min-content 顶宽——团队那三栏并排时直接互相压出格子。 */
-.composer-field,
-.composer-toggle-field {
+.composer-field {
   display: grid;
   min-width: 0;
   grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
-.composer-field > span,
-.composer-toggle-field > span {
+.composer-field > span {
   color: var(--muted);
   font-size: var(--t-xs);
   font-weight: var(--w-medium);
@@ -202,18 +200,6 @@
   font-size: var(--t-xs);
   font-style: normal;
   font-weight: var(--w-medium);
-}
-
-.composer-toggle-field .ui-choice {
-  display: flex;
-  height: 34px;
-  align-items: center;
-  gap: 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  padding: 0 10px;
-  font-size: var(--t-xs);
 }
 
 .composer-override-group {

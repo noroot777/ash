@@ -445,7 +445,7 @@ export function TaskComposerPanel({
               textareaRef.current?.focus();
             }}
           >
-          {({ options, executorTools }) => <>
+          {({ options, workspace, executorTools }) => <>
           <div className="studio-card">
           <ComposerCallDock calling={calling} onCancel={cancelCall} />
           <ComposerObjective body={body} textareaRef={textareaRef} autoFocus={!home}
@@ -469,8 +469,8 @@ export function TaskComposerPanel({
           <footer className="composer-footer">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
             <div className="composer-opts">{home
-              ? <>{options.where}<ComposerExpand onExpand={home.onExpand} /></>
-              : <>{options.where}{options.org}{options.more}</>}<ComposerShortcutHelp /></div>
+              ? <ComposerExpand onExpand={home.onExpand} />
+              : <>{options.org}{options.more}</>}<ComposerShortcutHelp /></div>
             <div className="composer-foot-run">
               {executorTools}
               <ComposerLaunchControl
@@ -493,7 +493,8 @@ export function TaskComposerPanel({
             </div>
           </footer>
           {allAttachments.length > 0 && <div className="studio-input-status" role="status">{allAttachments.length} 个附件</div>}
-          </div></>}
+          </div>
+          {workspace}</>}
           </ComposerFields>
           {home?.below}
         </div>

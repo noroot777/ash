@@ -46,6 +46,27 @@
   .composer-opts .composer-opt > span { display:none; }
 }
 
+/* 卡片下面常驻的一行：worktree 开关、从哪条分支开工（ComposerWorkspace.tsx）。和底排一样的字号与
+   灰度，左缘对着底排的附件键；不带外框，指到才有底色。 */
+.composer-workspace { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; min-height:28px; margin-top:8px; padding:0 6px; color:var(--muted); font-size:var(--t-xs); }
+.composer-workspace.is-static { gap:6px; padding:0 12px; }
+.composer-workspace > .ui-choice { gap:8px; height:28px; border-radius:var(--r-md); padding:0 8px 0 6px; color:var(--muted); font-size:var(--t-xs); transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.composer-workspace > .ui-choice:hover:not(:disabled) { background:var(--hover-bg); color:var(--ink); }
+.composer-workspace > .ui-choice[aria-checked="true"] { color:var(--ink); }
+.composer-workspace > .ui-choice:disabled { opacity:.55; }
+.composer-workspace > .ui-choice > .ui-toggle { width:26px; height:16px; flex-basis:26px; }
+.composer-workspace > .ui-choice > .ui-toggle::after { width:12px; height:12px; }
+.composer-workspace-base { flex:0 1 auto; max-width:min(320px,100%); }
+.composer-workspace-base .ui-select-trigger { height:28px; border-radius:var(--r-md); padding:0 6px 0 8px; color:var(--ink); font-size:var(--t-xs); }
+.composer-workspace-base .ui-select-trigger > span:first-child { display:inline-flex; align-items:center; gap:6px; }
+.composer-workspace-base .ui-select-trigger > span:first-child > svg { flex:none; color:var(--muted); }
+.composer-workspace-base .ui-select-trigger.is-mono > span:first-child { font-size:var(--t-xs); }
+.composer-workspace-merge { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.composer-workspace-merge > code { color:var(--ink); font-family:var(--font-mono); font-size:var(--t-xs); }
+.composer-workspace-save { height:24px; border:0; border-radius:var(--r-sm); padding:0 8px; background:var(--raised); color:var(--ink); font-size:var(--t-xs); transition:background var(--dur-1) var(--ease-out); }
+.composer-workspace-save:hover:not(:disabled) { background:var(--hover-bg); }
+.composer-workspace-save:disabled { opacity:.55; }
+
 /* 谁来做：单任务是一颗三段胶囊 */
 .studio-inline-executor { display:flex; flex:0 1 auto; min-width:0; align-items:center; gap:4px; margin:0 4px; }
 .studio-inline-executor > .composer-field { gap:0; }
@@ -104,9 +125,6 @@
 .studio-popover .composer-queue-after .studio-help { margin-top:0; }
 .studio-help { margin:12px 0 0; font-size:var(--t-xs); line-height:1.6; color:var(--muted); }
 .studio-help > svg { display:inline; margin-right:6px; vertical-align:-2px; }
-.composer-workspace-default-save { display:inline-flex; align-items:center; margin-left:6px; border:0; border-radius:var(--r-sm); padding:2px 8px; background:var(--raised); color:var(--ink); font-size:var(--t-xs); }
-.composer-workspace-default-save:hover:not(:disabled) { background:var(--hover-bg); }
-.composer-workspace-default-save:disabled { opacity:.55; }
 
 /* 「?」点开的快捷键帮助：四组，两列 */
 .studio-popover.composer-help { width:auto; padding:14px 16px 12px; }

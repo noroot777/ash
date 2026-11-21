@@ -73,7 +73,9 @@ try {
   await page.goto(`${web.origin}/scripts/fixtures/composer-upload.html?repo`);
   const objective = page.getByRole("textbox", { name: "任务目标" });
   const openLaunch = () => page.getByRole("button", { name: /^启动设置：/ }).click();
-  const space = page.getByRole("button", { name: /^工作目录：/ });
+  // 工作目录和 base 分支常驻在卡片下面，不用先点开。
+  const worktreeSwitch = page.getByRole("switch", { name: "独立 worktree" });
+  const baseButton = page.getByRole("button", { name: /^base 分支/ });
   const sendKey = page.getByRole("button", { name: "创建并等前置", exact: true });
   const blockedReason = () => page.locator(".studio-card .send-key-main").evaluate((element) =>
     document.getElementById(element.getAttribute("aria-describedby") ?? "")?.textContent ?? "");
@@ -81,10 +83,7 @@ try {
   const picked = page.locator(".composer-prereq-list > li");
   const row = (text) => page.locator(".ui-dropdown-row", { hasText: text });
   const worktreeOn = async () => {
-    await space.click();
-    const panel = page.getByRole("dialog", { name: "工作目录", exact: true });
-    if (await panel.getByRole("switch").getAttribute("aria-checked") !== "true") await panel.locator(".composer-toggle-field > span").click();
-    await page.keyboard.press("Escape");
+    if (await worktreeSwitch.getAttribute("aria-checked") !== "true") await worktreeSwitch.click();
   };
 
   await objective.fill("建在两条上面");
@@ -119,21 +118,16 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await sendKey.count(), 1, "发送键跟着这一种启动方式写字");
 
-  await space.click();
-  const directory = page.getByRole("dialog", { name: "工作目录", exact: true });
-  const baseButton = directory.getByRole("button", { name: /^base 分支/ });
   assert.equal(await baseButton.isDisabled(), true, "起点按前置定：base 分支不让选");
   assert.match(await baseButton.innerText(), /跟着前置走/);
-  assert.match(await directory.getByRole("button", { name: /^合入分支/ }).innerText(), /main/, "合入分支跟着前置走");
-  assert.match(await space.getAttribute("aria-label"), /跟着前置走/);
-  await page.keyboard.press("Escape");
+  assert.match(await page.locator(".composer-workspace-merge").innerText(), /合入 main/, "合入分支跟着前置走");
 
   // 草稿记得启动方式、已选的前置和这次的工作目录选择（项目默认是项目目录、这次改成了 worktree）：
   // 重开后两条都还在，不会按项目默认去判、把本来能选的当成失效去掉。
   const asked = candidateQueries.length;
   await page.getByTestId("reopen").click();
   await sendKey.waitFor();
-  assert.match(await space.getAttribute("aria-label"), /独立 worktree/, "工作目录选择随草稿回来");
+  assert.equal(await worktreeSwitch.getAttribute("aria-checked"), "true", "工作目录选择随草稿回来");
   await openLaunch();
   await page.waitForFunction(() => document.querySelectorAll(".composer-prereq-list em:not(:empty)").length === 2);
   assert.equal(await picked.count(), 2, "本来能选的前置一条不丢");
