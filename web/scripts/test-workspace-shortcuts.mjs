@@ -80,12 +80,15 @@ try {
   await type(["Shift+R"]);
   assert.match(await log.textContent(), /recall run$/, "Shift+R 应按下主区的运行按钮，且不打开「我说过的话」");
 
-  // Q 摊开会话左侧的输入导航；眼下没有哪条会话挂着导航时，按键原样放过、不吞。
+  // S 摊开会话左侧的输入导航；眼下没有哪条会话挂着导航时，按键原样放过、不吞。
+  const beforeOldShortcut = await log.textContent();
   await type(["q"]);
-  assert.match(await log.textContent(), /inputs$/, "Q 应摊开会话输入导航");
+  assert.equal(await log.textContent(), beforeOldShortcut, "旧快捷键 Q 不应再摊开会话输入导航");
+  await type(["s"]);
+  assert.match(await log.textContent(), /inputs$/, "S 应摊开会话输入导航");
   await clickAndBlur("toggle-inputs");
-  await type(["q"]);
-  assert.match(await log.textContent(), /q-passed-through$/, "没有输入导航时 Q 不应被吞掉");
+  await type(["s"]);
+  assert.match(await log.textContent(), /s-passed-through$/, "没有输入导航时 S 不应被吞掉");
   await clickAndBlur("toggle-inputs");
 
   // 聊天 / 助手 / 设置页把列表导航键关掉（enabled=false）。`G …` 一族的整个存在理由就是
@@ -107,7 +110,7 @@ try {
 
   // 反过来，列表导航那几颗单键在那些界面上没有落点，一颗都不能响。
   const quiet = await log.textContent();
-  await type(["c", "f", "j", "k", "Shift+R", "q", "Escape", "Enter"]);
+  await type(["c", "f", "j", "k", "Shift+R", "s", "Escape", "Enter"]);
   assert.equal(await log.textContent(), quiet, "列表导航键在聊天 / 助手 / 设置页不应触发");
   // Inspector 的 `I …` 同理：那些界面上根本没有那块面板。
   await type(["i", "g"]);
@@ -130,9 +133,9 @@ try {
   assert.equal(await entry.inputValue(), "gcgz");
   assert.equal(await log.textContent(), beforeEntry, "输入框里的 g c / g z 不应触发弹层或终端");
   await entry.fill("");
-  await entry.type("q");
-  assert.equal(await entry.inputValue(), "q");
-  assert.equal(await log.textContent(), beforeEntry, "输入框里的 q 不应摊开输入导航");
+  await entry.type("qs");
+  assert.equal(await entry.inputValue(), "qs");
+  assert.equal(await log.textContent(), beforeEntry, "输入框里的 q / s 不应摊开输入导航");
   await entry.fill("");
   await entry.type("rR");
   assert.equal(await entry.inputValue(), "rR");

@@ -18,7 +18,7 @@ function Navi() {
     return true;
   }), []);
 
-  // 眼下有没有一条会话挂着输入导航：新建面板、还没追问过的任务上没有，Q 得原样放过。
+  // 眼下有没有一条会话挂着输入导航：新建面板、还没追问过的任务上没有，S 得原样放过。
   const [hasInputs, setHasInputs] = useState(true);
   const inputsAbsent = useRef(false);
   inputsAbsent.current = !hasInputs;
@@ -30,8 +30,8 @@ function Navi() {
   // 列表导航关掉那段的「一颗都不能响」被它搅了。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "q" && !event.defaultPrevented && inputsAbsent.current) {
-        setLog((current) => [...current, "q-passed-through"]);
+      if (event.key === "s" && !event.defaultPrevented && inputsAbsent.current) {
+        setLog((current) => [...current, "s-passed-through"]);
       }
     };
     window.addEventListener("keydown", onKeyDown);

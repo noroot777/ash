@@ -4,7 +4,7 @@
 //   · 每条横线是我说过的一句话 —— 原始需求打头，后面是追问；哨兵投喂、审查打回不算；
 //   · 指上去附近几条横线一起鼓起来，旁边浮出那条输入的全文（长输入在卡片里滚得到结尾）；
 //   · 点一下会话直接跳到那颗气泡（原始需求跳到顶），而且跳过去之后来了新消息不把人拽回底部；
-//   · 按 Q 把每条输入都摊开（第一行之后的正文整段跟着，开头一样的两条分得开），方向键挑、回车跳；Esc / 再按 Q / 点外面收起；输入框里的 q 是字；
+//   · 按 S 把每条输入都摊开（第一行之后的正文整段跟着，开头一样的两条分得开），方向键挑、回车跳；Esc / 再按 S / 点外面收起；输入框里的 s 是字；
 //     会话被抽屉盖住时不摊开；列表半透明、放得下就 760 宽，摊开期间后面的会话不跟着新消息滚，收起再补上；
 //   · 滚轮落在导航条上照样滚会话，窄屏下正文不被刻度带压住。
 // 跑法：npm -w web run test:conversation-input-rail-dom
@@ -76,7 +76,7 @@ try {
   await flush();
   assert.deepEqual(await ticks.evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))), [
     "原始需求：在会话左侧加一条输入导航",
-    "第一次追问：Q 摊开全部",
+    "第一次追问：S 摊开全部",
     "第二次追问：点横线要跳到气泡",
     "第三次追问：哨兵别算进去",
     "第四次追问：读到哪一条要标出来",
@@ -88,6 +88,7 @@ try {
   // ── 指上去 ──
   await pointAt(2);
   assert.equal(await card.locator("p").textContent(), "第二次追问：点横线要跳到气泡", "卡片里应是指着的那条输入的全文");
+  assert.equal(await card.locator("kbd").textContent(), "S", "悬停提示显示新快捷键 S");
   const hoverWidths = await widths();
   assert.ok(hoverWidths[2] > hoverWidths[1] && hoverWidths[1] > hoverWidths[0], `离指针越近越长：${hoverWidths}`);
   assert.ok(Math.abs(hoverWidths[1] - hoverWidths[3]) < 0.5 || hoverWidths[3] > hoverWidths[1], `上下两侧一起鼓起来：${hoverWidths}`);
@@ -177,12 +178,16 @@ try {
   assert.equal(await currentTick(), "原始需求：在会话左侧加一条输入导航");
   await page.mouse.move(600, 300);
 
-  // ── Q 摊开 ──
+  // ── S 摊开 ──
   await page.keyboard.press("q");
+  assert.equal(await menu.count(), 0, "旧快捷键 Q 不再摊开列表");
+  await page.keyboard.press("s");
   await menu.waitFor();
+  await page.keyboard.press("q");
+  assert.equal(await menu.count(), 1, "旧快捷键 Q 不再收起列表");
   assert.deepEqual(await menu.getByRole("menuitem").evaluateAll((elements) => elements.map((element) => element.querySelector("span").textContent)), [
     "原始需求：在会话左侧加一条输入导航",
-    "第一次追问：Q 摊开全部",
+    "第一次追问：S 摊开全部",
     "第二次追问：点横线要跳到气泡",
     "第三次追问：哨兵别算进去",
     "第四次追问：读到哪一条要标出来",
@@ -221,7 +226,7 @@ try {
   assert.equal(await focused(), "原始需求：在会话左侧加一条输入导航", "焦点落在正读着的那一条");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-current")), "location", "读屏也要知道哪一条是正读着的");
   await page.keyboard.press("ArrowDown");
-  assert.equal(await focused(), "第一次追问：Q 摊开全部", "方向键挑");
+  assert.equal(await focused(), "第一次追问：S 摊开全部", "方向键挑");
   assert.ok(
     await menu.evaluate((element) => document.activeElement.getBoundingClientRect().top >= element.getBoundingClientRect().top - 1),
     "挪到比列表还高的长输入上，露出的是它的开头",
@@ -239,28 +244,28 @@ try {
   const fromMenu = await bubbleOffset("persisted:user:s2:1");
   assert.ok(fromMenu >= 10 && fromMenu <= 22, `回车应跳到第三次追问：${fromMenu}`);
 
-  // 再按 Q 收起；Esc 收起；点外面收起。
-  await page.keyboard.press("q");
+  // 再按 S 收起；Esc 收起；点外面收起。
+  await page.keyboard.press("s");
   await menu.waitFor();
   assert.equal(await focused(), "第三次追问：哨兵别算进去", "再摊开时焦点跟着读到的那一条走");
-  // 摊开期间工作区重渲过一遍，它的快捷键监听重挂到了列表的监听后面：这下 Q 也只收起，不会收了又被它摊开。
+  // 摊开期间工作区重渲过一遍，它的快捷键监听重挂到了列表的监听后面：这下 S 也只收起，不会收了又被它摊开。
   await page.evaluate(() => window.dispatchEvent(new Event("fixture-rerender")));
   await flush();
-  await page.keyboard.press("q");
+  await page.keyboard.press("s");
   await flush();
-  assert.equal(await menu.count(), 0, "摊开时再按 Q 收起");
-  await page.keyboard.press("q");
+  assert.equal(await menu.count(), 0, "摊开时再按 S 收起");
+  await page.keyboard.press("s");
   await menu.waitFor();
   await page.keyboard.press("Escape");
   await flush();
   assert.equal(await menu.count(), 0, "Esc 收起");
-  await page.keyboard.press("q");
+  await page.keyboard.press("s");
   await menu.waitFor();
   await page.mouse.click(700, 400);
   await flush();
   assert.equal(await menu.count(), 0, "点外面收起");
   // 点列表里的一行直接跳。
-  await page.keyboard.press("q");
+  await page.keyboard.press("s");
   await menu.waitFor();
   await menu.getByRole("menuitem").nth(1).click();
   await settle();
@@ -268,25 +273,25 @@ try {
   const fromClick = await bubbleOffset("persisted:user:s1:2");
   assert.ok(fromClick >= 10 && fromClick <= 22, `点列表里那一行应跳到第一次追问：${fromClick}`);
 
-  // 会话被抽屉盖住：Q 不该在底下摊开一张看不见、还把键盘收走的列表。
+  // 会话被抽屉盖住：S 不该在底下摊开一张看不见、还把键盘收走的列表。
   await page.getByTestId("cover").click();
-  await page.keyboard.press("q");
+  await page.keyboard.press("s");
   await flush();
-  assert.equal(await menu.count(), 0, "会话被盖住时按 Q 不应摊开");
+  assert.equal(await menu.count(), 0, "会话被盖住时按 S 不应摊开");
   await page.getByTestId("uncover").click();
-  await page.keyboard.press("q");
+  await page.keyboard.press("s");
   await menu.waitFor();
   await page.keyboard.press("Escape");
   await flush();
   assert.equal(await menu.count(), 0);
 
-  // 输入框里的 q 是字，不是快捷键。
+  // 输入框里的 s 是字，不是快捷键。
   const entry = page.getByTestId("text-entry");
   await entry.click();
-  await entry.type("q");
-  assert.equal(await entry.inputValue(), "q");
+  await entry.type("s");
+  assert.equal(await entry.inputValue(), "s");
   await flush();
-  assert.equal(await menu.count(), 0, "输入框里打 q 不应摊开列表");
+  assert.equal(await menu.count(), 0, "输入框里打 s 不应摊开列表");
 
   // 平滑跳转半路被接管（拖滚动条、按翻页键之类，不经滚轮）：滚动一停就别再死守着点的那一条。
   await pointAt(0);
@@ -305,7 +310,7 @@ try {
   await page.getByTestId("append-twins").click();
   await page.getByTestId("append-twins").evaluate((element) => element.blur());
   await flush();
-  await page.keyboard.press("q");
+  await page.keyboard.press("s");
   await menu.waitFor();
   const twins = await menu.getByRole("menuitem").evaluateAll((elements) => elements.slice(-2).map((element) => [
     element.querySelector("span").textContent,
@@ -340,7 +345,7 @@ try {
     await settle();
   };
   const openList = async () => {
-    await page.keyboard.press("q");
+    await page.keyboard.press("s");
     await menu.waitFor();
   };
   // 先确认没摊开时新消息照常跟到底：不然下面「摊开期间不跟」量到的只是本来就没在跟。

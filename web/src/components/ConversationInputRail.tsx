@@ -40,7 +40,7 @@ function isTextEntry(target: EventTarget | null): boolean {
  *
  * - 指上去：附近几条横线像程序坞那样鼓起来，旁边浮出那条输入的全文；
  * - 点一下（横线或那张卡片）：会话直接跳到那颗气泡，并闪一下认出是哪一颗；
- * - 按 Q：整条摊开成一张列表，每条一行，方向键挑、回车跳，Esc / Q 收起。
+ * - 按 S：整条摊开成一张列表，每条一行，方向键挑、回车跳，Esc / S 收起。
  *
  * 读到哪一条，哪一格就亮一些长一些（滚动时跟着走），不指上去也看得出自己在哪。
  */
@@ -252,7 +252,7 @@ export function ConversationInputRail({
     return () => onCover(false);
   }, [menuOpen, onCover]);
 
-  // 摊开时焦点落在「正读着的那一条」上，并把它挪到列表中间：人按 Q 多半是想去它前后几条。
+  // 摊开时焦点落在「正读着的那一条」上，并把它挪到列表中间：人按 S 多半是想去它前后几条。
   useLayoutEffect(() => {
     if (!menuOpen) return;
     const menu = menuRef.current;
@@ -267,13 +267,13 @@ export function ConversationInputRail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menuOpen]);
 
-  // 摊开期间的键：这时工作区的单键被这张菜单挡住了（role="menu" 算阻挡层），Q 得自己收。
+  // 摊开期间的键：这时工作区的单键被这张菜单挡住了（role="menu" 算阻挡层），S 得自己收。
   useEffect(() => {
     if (!menuOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       // 下面认下的键一律截断在这里（stopImmediatePropagation，不只是 stopPropagation）：工作区快捷键
-      // 也挂在 window 的捕获阶段，它每次重挂都会排到这个监听后面。只停传播的话，收起列表的那下 Q
+      // 也挂在 window 的捕获阶段，它每次重挂都会排到这个监听后面。只停传播的话，收起列表的那下 S
       // 照样落到它手上，而那时列表已经撤掉、挡不住它，于是又被它摊开。
       const menu = menuRef.current;
       if (!menu) return;
@@ -393,7 +393,7 @@ export function ConversationInputRail({
 }
 
 /**
- * 摊开的列表里一条输入的其余部分：第一行之后的正文整段、附件名。不截断 —— Q 就是要把输入
+ * 摊开的列表里一条输入的其余部分：第一行之后的正文整段、附件名。不截断 —— S 就是要把输入
  * 都打开，开头一样的两次追问靠后文分得开，长输入也得读得到结尾（列表本身能滚）。
  * 全用 span：它们在 button 里头，button 只收短语内容。
  */

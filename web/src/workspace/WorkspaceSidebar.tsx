@@ -10,6 +10,7 @@ import {
   Plus,
   SidebarSimple,
   ChatCircleDots,
+  ClockCounterClockwise,
 } from "@phosphor-icons/react";
 import { ColorThemeMenu } from "../components/ColorThemeChoice.tsx";
 import { CommandsLauncher } from "./CommandsLauncher.tsx";
@@ -50,6 +51,7 @@ export function WorkspaceSidebar({
   notify,
   onToggleCollapsed,
   onSearch,
+  onOpenRecall,
   onNotes,
   onChat,
   chatOpen,
@@ -89,6 +91,7 @@ export function WorkspaceSidebar({
   notify: (message: string) => void;
   onToggleCollapsed: () => void;
   onSearch: () => void;
+  onOpenRecall: () => void;
   onNotes: () => void;
   onChat?: () => void;
   chatOpen?: boolean;
@@ -136,7 +139,7 @@ export function WorkspaceSidebar({
 
   return (
     <aside className={`workspace-sidebar${spread.laidOut ? " is-spread" : ""}${spread.open ? " is-spread-open" : ""}`} aria-label="项目和任务导航">
-      {/* 顶上两行：「在哪儿」（项目、常用命令），再是一行工具（列表、搜索、随手记、新建）。
+      {/* 顶上两行：「在哪儿」（项目、常用命令），再是一行工具（列表、我说过的话、搜索、随手记、新建）。
           分组管理不在这几行里：它在项目菜单的「设置」和 ⌘K 里。主仓在哪个分支挪到了最底下那一行。 */}
       <div className="workspace-sidebar-top">
         <div className="workspace-sidebar-selectors">
@@ -159,7 +162,7 @@ export function WorkspaceSidebar({
             notify={notify}
           />
         </div>
-        {/* 第二行工具条：左边按 F、⌘K、随手记排三颗图标，右端是「新建任务」。铺开时
+        {/* 第二行工具条：左边按 F、R、⌘K、随手记排四颗图标，右端是「新建任务」。铺开时
             状态筛选的胶囊夹在中间，不另起一行。手机上铺开没有意义，最左那一格换成筛选菜单 ——
             两种筛选入口在这里二选一，保证支持筛选的项目在哪种屏幕上都摸得到一个入口。 */}
         <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
@@ -170,6 +173,9 @@ export function WorkspaceSidebar({
                 <ListBullets size={16} aria-hidden="true" />
               </SidebarIconButton>
             )}
+          <SidebarIconButton label="我说过的话" keys="R" haspopup="dialog" onClick={onOpenRecall}>
+            <ClockCounterClockwise size={16} aria-hidden="true" />
+          </SidebarIconButton>
           <SidebarIconButton label="搜索" keys={`${modifier} K`} haspopup="dialog" onClick={onSearch}>
             <MagnifyingGlass size={15} aria-hidden="true" />
           </SidebarIconButton>

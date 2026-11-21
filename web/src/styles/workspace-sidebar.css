@@ -32,10 +32,9 @@
   gap: 3px;
 }
 
-/* 第二行工具条：左边三颗图标（任务列表 F、搜索 ⌘K、随手记），右端「新建任务」带字。
+/* 第二行工具条：左边四颗图标（任务列表 F、我说过的话 R、搜索 ⌘K、随手记），右端「新建任务」带字。
    铺开时筛选胶囊夹在中间（自带 margin-right:auto）；不铺开时由新建任务自己的
-   margin-left:auto 顶到右端。最窄 220px 时：三颗图标 84px + 两道间隙 + 新建任务约 88px，
-   落在可用的 196px 里。 */
+   margin-left:auto 顶到右端。窄侧栏里新建任务的文字按剩余宽度省略。 */
 .workspace-sidebar-tools {
   display: flex;
   height: 32px;
