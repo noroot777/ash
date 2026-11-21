@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { GitHub, NO_TOKEN_HINT, resolveToken } from "./github.mjs";
 import { updateDownloadChannel } from "./release-channel.mjs";
 import { itemDetails, latestItem, readConfig } from "./release-state.mjs";
+import { distributionName } from "./architecture.mjs";
 
 export function verifyDownload(bytes, signature, publicKey) {
   const raw = Buffer.from(publicKey, "base64");
@@ -21,7 +22,7 @@ export async function initializeDownloadPage(github, config, { check = false, fe
   const tag = `${config.tagPrefix}${latest.shortVersion}-${latest.version}`;
   const release = await github.findRelease(config.releaseRepo, tag);
   assert.ok(release && !release.draft && !release.prerelease, "现有版本还不是公开稳定版");
-  const name = `Navi-${latest.shortVersion}-${latest.version}.dmg`;
+  const name = distributionName(latest.shortVersion, latest.version, config.architecture ?? "arm64");
   const asset = release.assets?.find((entry) => entry.name === name);
   assert.equal(asset?.browser_download_url, latest.url, "更新源和公开 Release 的下载地址不一致");
   assert.equal(latest.url, `https://github.com/${config.releaseRepo}/releases/download/${tag}/${name}`);

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { compareVersions } from "./appcast.mjs";
 import { GitHub, resolveToken } from "./github.mjs";
 import { WORKFLOW, assertVersion, downloadPage, itemDetails, latestItem, readConfig, runName, sourceVersion } from "./release-state.mjs";
+import { architectureConfig, configuredArchitectures } from "./architecture.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const VERSION_FILE = "desktop/macos/build.sh";
@@ -55,9 +56,12 @@ export async function releaseCloud(version, { cwd = ROOT, github, say = console.
   const workflow = (await github.call("GET", `/repos/${config.releaseRepo}/actions/workflows/${WORKFLOW}`)).json;
   if (workflow.state !== "active") throw new Error("Mac 发布工作流未启用：先将工作流合入 main 并启用 Actions。");
   await previousRun(github, config.releaseRepo, version, git(cwd, ["rev-parse", "HEAD"]));
-  const feed = await github.readFile(config.feedRepo, config.appcastPath, config.feedBranch);
-  const latest = itemDetails(latestItem(feed?.text));
-  if (latest?.shortVersion && compareVersions(version, latest.shortVersion) < 0) {
+  const latestVersions = await Promise.all(configuredArchitectures(config).map(async (architecture) => {
+    const channel = architectureConfig(config, architecture);
+    const feed = await github.readFile(channel.feedRepo, channel.appcastPath, channel.feedBranch);
+    return itemDetails(latestItem(feed?.text));
+  }));
+  for (const latest of latestVersions) if (latest?.shortVersion && compareVersions(version, latest.shortVersion) < 0) {
     throw new Error(`更新源已经是 ${latest.shortVersion}，不能发布更旧的 ${version}`);
   }
   say("▶ 核对 origin/main（不自动合并、不强推）");
@@ -66,7 +70,7 @@ export async function releaseCloud(version, { cwd = ROOT, github, say = console.
   const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", remote, "HEAD"], { cwd });
   if (ancestor.status !== 0) throw new Error("远端 main 有本地尚未包含的提交：先自行同步、处理分叉，再发布。没有修改版本或推送。");
   const head = git(cwd, ["rev-parse", "HEAD"]);
-  if (latest?.shortVersion === version && latest.commit && !head.startsWith(latest.commit)) {
+  for (const latest of latestVersions) if (latest?.shortVersion === version && latest.commit && !head.startsWith(latest.commit)) {
     throw new Error(`${version} 已从另一个提交发布；改用新的版本号。没有修改版本或推送。`);
   }
   if (git(cwd, ["status", "--porcelain"]) || readFileSync(path, "utf8") !== original) {
@@ -96,9 +100,12 @@ export async function releaseCloud(version, { cwd = ROOT, github, say = console.
     say(`Mac 下载页：${downloadPage(config)}`);
     return existing;
   }
-  if (latest?.shortVersion === version) {
+  if (latestVersions.every((latest) => latest?.shortVersion === version)) {
     say(`✓ 这一版已在更新源中：${downloadPage(config)}（没有重新发包）`);
     return null;
+  }
+  if (latestVersions.some((latest) => latest?.shortVersion === version)) {
+    throw new Error("只有部分架构已经发布这一版本，且没有可恢复的原工作流：使用新的版本号发布双架构，不重封已公开的包。");
   }
   let run;
   try {

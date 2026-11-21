@@ -18,6 +18,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$HERE/build"
 APP="$BUILD/Navi.app"
+ARCH="$(node "$HERE/scripts/architecture.mjs")"
+export NAVI_MAC_ARCH="$ARCH"
+SWIFT_ARCH="${ARCH/x64/x86_64}"
 # 给人看的版本。Sparkle 比的是下面的 CFBundleVersion。
 VERSION="0.3.1"
 # CFBundleVersion 必须严格递增：账本记着这台机器上发过的最后一个号，新号一定比它大（规则见
@@ -44,10 +47,12 @@ BUNDLE_ID="${BUNDLE_ID:-dev.navi.mac}"
 
 # 更新源：release.json 里放 appcast 的那个仓库（feedRepo，不是放安装包的 releaseRepo）→
 # raw.githubusercontent 上那份 appcast。
-RELEASE_CONFIG="$(node -e '
-  const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+RELEASE_CONFIG="$(node --input-type=module -e '
+  const { readFileSync } = await import("node:fs");
+  const { architectureConfig } = await import(process.argv[2]);
+  const c = architectureConfig(JSON.parse(readFileSync(process.argv[1], "utf8")), process.argv[3]);
   if (!c.feedRepo) { console.error("✕ release.json 里没有 feedRepo"); process.exit(1); }
-  console.log(c.feedRepo, c.feedBranch || "main", c.appcastPath || "appcast.xml", c.publicKey || "-");' "$HERE/release.json")"
+  console.log(c.feedRepo, c.feedBranch || "main", c.appcastPath || "appcast.xml", c.publicKey || "-");' "$HERE/release.json" "$HERE/scripts/architecture.mjs" "$ARCH")"
 read -r FEED_REPO FEED_BRANCH FEED_APPCAST RELEASE_KEY <<< "$RELEASE_CONFIG"
 FEED_URL="${NAVI_MAC_FEED_URL:-${ASH_MAC_FEED_URL:-}}"
 FEED_URL="${FEED_URL:-https://raw.githubusercontent.com/$FEED_REPO/$FEED_BRANCH/$FEED_APPCAST}"
@@ -55,19 +60,13 @@ ED_KEY="${NAVI_MAC_ED_PUBLIC_KEY:-${ASH_MAC_ED_PUBLIC_KEY:-}}"
 ED_KEY="${ED_KEY:-$RELEASE_KEY}"
 [[ "$ED_KEY" == "-" ]] && ED_KEY=""
 
-# 自带的 node 是 darwin-arm64 那一份，node-pty 也按本机架构现编，所以只在 Apple 芯片上出包。
-if [[ "$(uname -m)" != arm64 ]]; then
-  echo "✕ 只支持在 Apple 芯片（arm64）的 Mac 上构建" >&2
-  exit 1
-fi
-
 SPARKLE="$(node "$HERE/scripts/sparkle.mjs")"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$HERE/../../docs/logo/loader.svg" "$APP/Contents/Resources/loader.svg"
 
-swiftc -O -swift-version 5 -target arm64-apple-macos14.0 \
+swiftc -O -swift-version 5 -target "$SWIFT_ARCH-apple-macos14.0" \
   -framework AppKit -framework WebKit -F "$SPARKLE" -framework Sparkle \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   "$HERE"/Sources/*.swift -o "$APP/Contents/MacOS/Navi"
@@ -116,6 +115,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
   <key>NaviSourceCommit</key><string>$(git rev-parse --short HEAD 2>/dev/null || echo unknown)</string>
+  <key>NaviArchitecture</key><string>$ARCH</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticTermination</key><false/>

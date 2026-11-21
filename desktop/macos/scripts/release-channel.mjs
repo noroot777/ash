@@ -1,7 +1,9 @@
 import { compareVersions } from "./appcast.mjs";
 import { downloadPage, itemDetails, latestItem } from "./release-state.mjs";
+import { ARCHITECTURES, architectureConfig, configuredArchitectures, distributionName } from "./architecture.mjs";
 
 export async function updateDownloadChannel(github, config, release) {
+  const architecture = config.architecture ?? "arm64";
   const currentFeed = await github.readFile(config.feedRepo, config.appcastPath, config.feedBranch);
   const latest = itemDetails(latestItem(currentFeed?.text));
   if (latest && compareVersions(latest.version, release.version) > 0) {
@@ -11,17 +13,36 @@ export async function updateDownloadChannel(github, config, release) {
     throw new Error("Mac 下载页未更新：更新源尚未确认这一版及其安装包链接；重跑可补齐。");
   }
   const current = await github.findRelease(config.releaseRepo, config.downloadTag);
-  const pointed = current?.body?.match(/<!-- navi-mac-build:([^ >]+) -->/)?.[1];
-  if (pointed && compareVersions(pointed, release.version) > 0) return `Mac 下载页留在更新的 ${pointed}`;
+  const releases = [];
+  for (const target of configuredArchitectures(config)) {
+    const channel = architectureConfig(config, target);
+    const otherFeed = target === architecture ? currentFeed : await github.readFile(channel.feedRepo, channel.appcastPath, channel.feedBranch);
+    const details = itemDetails(latestItem(otherFeed?.text));
+    const marker = target === "arm64" ? "navi-mac-build" : `navi-mac-build-${target}`;
+    const pointed = current?.body?.match(new RegExp(`<!-- ${marker}:([^ >]+) -->`))?.[1];
+    if (pointed && (!details || compareVersions(pointed, details.version) > 0)) return `Mac 下载页留在更新的 ${pointed}`;
+    if (!details) continue;
+    const tag = `${channel.tagPrefix}${details.shortVersion}-${details.version}`;
+    const page = `https://github.com/${channel.releaseRepo}/releases/tag/${tag}`;
+    if (target !== architecture && !details.url?.endsWith(`/${tag}/${distributionName(details.shortVersion, details.version, target)}`)) {
+      throw new Error(`${ARCHITECTURES[target].label} 更新源的下载地址与架构不符，未改下载页`);
+    }
+    releases.push({ ...details, architecture: target, marker, page: target === architecture ? release.page : page });
+  }
+  const newest = releases.reduce((best, entry) => compareVersions(entry.shortVersion, best.shortVersion) > 0 ? entry : best);
   const body = [
-    `<!-- navi-mac-build:${release.version} -->`,
+    ...releases.map((entry) => `<!-- ${entry.marker}:${entry.version} -->`),
     "此页是 Mac 最新稳定版的固定下载入口，不代表此页 tag 的源码版本。",
     "",
-    `## Navi ${release.shortVersion}`,
+    `## Navi ${newest.shortVersion}`,
     "",
-    `**[下载 Mac 安装包（Apple 芯片）](${release.url})**`,
+    ...releases.flatMap((entry) => [
+      `**[下载 Mac 安装包（${ARCHITECTURES[entry.architecture].label}）](${entry.url})** · ${entry.shortVersion}`,
+      `[查看这一版的更新说明与源码](${entry.page})`,
+      "",
+    ]),
     "",
-    `要求 Apple 芯片（M 系列）、macOS 14+。[查看这一版的更新说明与源码](${release.page})。`,
+    "要求 macOS 14+。Apple 芯片（M 系列）和 Intel 安装包不能混用。",
     "",
     `安装与首次打开说明：https://github.com/${config.releaseRepo}#mac-客户端`,
     "",

@@ -49,7 +49,7 @@ const makeKey = (name) => {
 const key = makeKey("rehearsal");
 const wrong = makeKey("wrong");
 
-function fakeApp(version, publicKey, { feed = "http://127.0.0.1:1/appcast.xml", commit = "unknown", tag = version, commitKey = "NaviSourceCommit" } = {}) {
+function fakeApp(version, publicKey, { feed = "http://127.0.0.1:1/appcast.xml", commit = "unknown", tag = version, commitKey = "NaviSourceCommit", architecture = "arm64" } = {}) {
   const app = join(temporary, `apps-${tag}`, "Navi.app");
   mkdirSync(join(app, "Contents/MacOS"), { recursive: true });
   writeFileSync(join(app, "Contents/MacOS/Navi"), `binary ${tag}`);
@@ -58,6 +58,7 @@ function fakeApp(version, publicKey, { feed = "http://127.0.0.1:1/appcast.xml", 
   <key>CFBundleVersion</key><string>${version}</string>
   <key>CFBundleShortVersionString</key><string>0.2.0</string>
   <key>${commitKey}</key><string>${commit}</string>
+  <key>NaviArchitecture</key><string>${architecture}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>SUFeedURL</key><string>${feed}</string>
   <key>SUPublicEDKey</key><string>${publicKey}</string>
@@ -318,7 +319,8 @@ function readmeRepo() {
 async function formalRehearsal() {
   const configFile = join(temporary, "release.json");
   const config = { releaseRepo: "o/app", legacyReleaseRepo: "o/old", feedRepo: "o/feed", feedBranch: "main", appcastPath: "navi/mac/appcast.xml",
-    legacyAppcastPath: "ash/mac/appcast.xml", tagPrefix: "navi-mac-v", keychainAccount: "unused", publicKey: key.publicKey };
+    legacyAppcastPath: "ash/mac/appcast.xml", tagPrefix: "navi-mac-v", keychainAccount: "unused", publicKey: key.publicKey,
+    architectures: { x64: { appcastPath: "navi/mac/appcast-intel.xml", tagPrefix: "navi-mac-intel-v", legacyAppcastPath: null } } };
   const feed = "https://raw.githubusercontent.com/o/feed/main/navi/mac/appcast.xml";
   const { readme, git } = readmeRepo();
   const publish = async (github, app, { conf = config, artifacts = "formal-artifacts" } = {}) => new Promise((done) => {
@@ -475,6 +477,38 @@ async function formalRehearsal() {
   assert.match(result.out, /改名前的更新源已经指着 20000102\.0003/);
   assert.deepEqual(writes(github), [], "an older retry moves neither feed nor channel backwards");
   assert.ok(channel.body.includes("20000102.0003"));
+  const dual = await fakeGitHub({ push: both, commits: { abc1234: sha } });
+  try {
+    const armApp = fakeApp("20000104.0001", key.publicKey, { feed, commit: "abc1234", tag: "dual-arm" });
+    result = await publish(dual, armApp, { artifacts: "dual-artifacts" });
+    assert.equal(result.status, 0, result.out);
+    const armFeed = dual.state.files.get("o/feed:navi/mac/appcast.xml").text;
+    const legacyFeed = dual.state.files.get("o/feed:ash/mac/appcast.xml").text;
+    const intelApp = fakeApp("20000104.0001", key.publicKey, { feed: "https://raw.githubusercontent.com/o/feed/main/navi/mac/appcast-intel.xml",
+      commit: "abc1234", tag: "dual-intel", architecture: "x64" });
+    result = await publish(dual, intelApp, { artifacts: "dual-artifacts" });
+    assert.equal(result.status, 0, result.out);
+    const intelRelease = dual.state.releases.find((entry) => entry.tag_name === "navi-mac-intel-v0.2.0-20000104.0001");
+    assert.equal(intelRelease.name, "Navi for macOS 0.2.0 · Intel");
+    assert.equal(intelRelease.assets[0].name, "Navi-0.2.0-20000104.0001-intel.dmg");
+    const intelFeed = dual.state.files.get("o/feed:navi/mac/appcast-intel.xml").text;
+    assert.ok(intelFeed.includes(intelRelease.assets[0].browser_download_url));
+    writeFileSync(join(temporary, "intel-appcast.xml"), intelFeed);
+    assert.equal(verify(join(temporary, "intel-appcast.xml")), 0, "Intel feed is signed with the existing trusted key");
+    verifyDownload(dual.state.downloads.get(new URL(intelRelease.assets[0].browser_download_url).pathname), intelFeed.match(/sparkle:edSignature="([^"]+)"/)[1], key.publicKey);
+    assert.equal(dual.state.files.get("o/feed:navi/mac/appcast.xml").text, armFeed);
+    assert.equal(dual.state.files.get("o/feed:ash/mac/appcast.xml").text, legacyFeed);
+    const dualPage = dual.state.releases.find((entry) => entry.tag_name === "navi-mac-latest");
+    assert.ok(dualPage.body.includes(intelRelease.assets[0].browser_download_url));
+    assert.match(dualPage.body, /下载 Mac 安装包（Apple 芯片）/);
+    assert.match(dualPage.body, /下载 Mac 安装包（Intel）/);
+    assert.equal(dualPage.make_latest, "false");
+    dual.state.calls.length = 0;
+    result = await publish(dual, intelApp, { artifacts: "dual-artifacts" });
+    assert.equal(result.status, 0, result.out);
+    assert.deepEqual(writes(dual), [], "Intel retry is idempotent and preserves the ARM download");
+  } finally { await dual.close(); }
+  console.log("PASS: Intel publication uses a separate signed feed, dmg and tag while retaining the ARM/legacy feeds and both download choices");
   assert.equal(git("log", "-1", "--format=%s"), "init");
   console.log("PASS: retry repairs a failed channel without re-uploading and never rolls a newer page back");
 }

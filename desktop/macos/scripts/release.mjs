@@ -42,6 +42,7 @@ import { updateDownloadChannel } from "./release-channel.mjs";
 import { LINK_COMMIT_PREFIX, readConfig as loadConfig } from "./release-state.mjs";
 import { GitHub, NO_TOKEN_HINT, resolveToken } from "./github.mjs";
 import { ensureSparkle } from "./sparkle.mjs";
+import { architectureConfig, distributionName } from "./architecture.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MAC = resolve(HERE, "..");
@@ -101,7 +102,7 @@ async function main() {
       "init-repo": { type: "boolean" },
     },
   });
-  const config = readConfig();
+  let config = readConfig();
   const sparkle = await ensureSparkle();
   const tool = (name) => join(sparkle, "bin", name);
   const account = values["ed-key-file"] ? null : signingAccount(config, tool);
@@ -151,6 +152,7 @@ async function main() {
     app = join(MAC, "build", "Navi.app");
   }
   const info = appInfo(app);
+  config = architectureConfig(config, info.NaviArchitecture ?? "arm64");
   const version = info.CFBundleVersion;
   const shortVersion = info.CFBundleShortVersionString;
   // 改名前的构建记在 AshSourceCommit 里（重发一份旧构建时用得上）。
@@ -184,7 +186,7 @@ async function main() {
   const tag = `${local ? "v" : config.tagPrefix}${shortVersion}-${version}`;
   // NAVI_MAC_RELEASE_ARTIFACTS 只给回归测试换地方，免得演练的包落进 build/releases。
   const artifacts = join(readEnv(process.env, "NAVI_MAC_RELEASE_ARTIFACTS") || join(MAC, "build", "releases"), tag);
-  const dmg = join(artifacts, `Navi-${shortVersion}-${version}.dmg`);
+  const dmg = join(artifacts, distributionName(shortVersion, version, config.architecture));
   // appcast 里已经有这一版：只有正式发版、上次签进去的那个包本地还在时才往下走（签名对上了只补收尾）。
   const already = items.find((item) => item.version === version);
   if (already && (local || !existsSync(dmg))) die(`${version} 已经发过了（appcast 里有）。`);
@@ -211,7 +213,7 @@ async function main() {
   } else {
     const put = await putOnRelease(github, config, {
       tag, commit, dmg, length,
-      name: `Navi for macOS ${shortVersion}`,
+      name: `Navi for macOS ${shortVersion}${config.architecture === "x64" ? " · Intel" : ""}`,
       body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Navi（Navi.app）拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`
         + `\n\n装着改名前的 Ash.app：装法一样，装好打开一次 Navi，它会接过 Ash 的设置、数据和登录项，把 Ash.app 移到废纸篓。`,
     });

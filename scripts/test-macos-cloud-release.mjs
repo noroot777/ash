@@ -12,7 +12,7 @@ import { assertVersion, nextBuildNumber, sourceVersion } from "../desktop/macos/
 const temporary = mkdtempSync(join(tmpdir(), "navi-cloud-release-"));
 const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
 const config = { releaseRepo: "o/app", feedRepo: "o/feed", feedBranch: "main", appcastPath: "navi/mac/appcast.xml", tagPrefix: "navi-mac-v" };
-const state = { active: true, runs: [], calls: [], dispatches: 0, dispatchStatus: 200, denyRuns: false };
+const state = { active: true, runs: [], calls: [], dispatches: 0, dispatchStatus: 200, denyRuns: false, feeds: {} };
 const server = createServer(async (request, response) => {
   try {
     assert.equal(request.headers.authorization, "Bearer test-token");
@@ -29,7 +29,10 @@ const server = createServer(async (request, response) => {
       const page = Number(url.searchParams.get("page") ?? 1);
       return send(state.denyRuns ? 403 : 200, { workflow_runs: state.runs.slice((page - 1) * 100, page * 100) });
     }
-    if (path.startsWith("/repos/o/feed/contents/")) return send(404, {});
+    if (path.startsWith("/repos/o/feed/contents/")) {
+      const feed = state.feeds[path.slice("/repos/o/feed/contents/".length)];
+      return feed ? send(200, { content: Buffer.from(feed).toString("base64"), encoding: "base64", sha: "feed-sha" }) : send(404, {});
+    }
     if (path.endsWith("/dispatches")) {
       assert.equal(request.method, "POST");
       assert.equal(request.headers["x-github-api-version"], "2026-03-10");
@@ -60,7 +63,7 @@ function git(cwd, ...args) {
   return result.stdout.trim();
 }
 
-function fixture(name) {
+function fixture(name, releaseConfig = config) {
   const directory = join(temporary, name);
   const bare = join(temporary, `${name}.git`);
   mkdirSync(join(directory, "desktop/macos"), { recursive: true });
@@ -72,7 +75,7 @@ function fixture(name) {
   git(directory, "config", `url.file://${bare}.insteadOf`, "https://github.com/o/app.git");
   git(directory, "remote", "add", "origin", "https://github.com/o/app.git");
   writeFileSync(join(directory, "desktop/macos/build.sh"), '#!/bin/bash\nVERSION="0.3.1"\n');
-  writeFileSync(join(directory, "desktop/macos/release.json"), JSON.stringify(config));
+  writeFileSync(join(directory, "desktop/macos/release.json"), JSON.stringify(releaseConfig));
   writeFileSync(join(directory, "business.txt"), "already reviewed\n");
   git(directory, "add", ".");
   git(directory, "commit", "-qm", "initial");
@@ -174,6 +177,30 @@ try {
   assert.equal(sourceVersion(readFileSync(hooks.build, "utf8")), "0.3.1");
   assert.equal(git(hooks.directory, "status", "--porcelain"), "");
   console.log("PASS: remote-ahead and push rejection never dispatch; commit rejection restores only the version edit");
+
+  const dualConfig = { ...config, architectures: { x64: { appcastPath: "navi/mac/appcast-intel.xml", tagPrefix: "navi-mac-intel-v", legacyAppcastPath: null } } };
+  const dual = fixture("dual", dualConfig);
+  const feed = (version, commit) => `<rss><channel><item><sparkle:version>20261121.010203</sparkle:version><sparkle:shortVersionString>${version}</sparkle:shortVersionString><navi:commit>${commit}</navi:commit></item></channel></rss>`;
+  state.feeds[config.appcastPath] = feed("0.3.0", dual.head());
+  state.feeds[dualConfig.architectures.x64.appcastPath] = feed("0.3.3", dual.head());
+  const dualHead = dual.head();
+  const dualDispatches = state.dispatches;
+  await assert.rejects(publish(dual), /更新源已经是 0.3.3/);
+  assert.equal(dual.head(), dualHead, "Intel downgrade preflight never changes source version");
+  assert.ok(state.calls.includes("GET /repos/o/feed/contents/navi/mac/appcast-intel.xml"));
+  state.feeds[dualConfig.architectures.x64.appcastPath] = feed("0.3.1", "f".repeat(40));
+  await assert.rejects(publish(dual, "0.3.1"), /已从另一个提交发布/);
+  state.feeds[dualConfig.architectures.x64.appcastPath] = feed("0.3.1", dualHead);
+  await assert.rejects(publish(dual, "0.3.1"), /只有部分架构已经发布/);
+  assert.equal(state.dispatches, dualDispatches, "partial publication without an original run never dispatches new bytes");
+  state.feeds[config.appcastPath] = feed("0.3.1", dualHead);
+  assert.equal(await publish(dual, "0.3.1"), null);
+  assert.equal(state.dispatches, dualDispatches, "both published channels are a no-op even without workflow history");
+  delete state.feeds[dualConfig.architectures.x64.appcastPath];
+  state.feeds[config.appcastPath] = feed("0.3.0", dualHead);
+  await publish(dual);
+  assert.equal(state.dispatches, dualDispatches + 1, "a first Intel release can accompany a newer Apple release");
+  console.log("PASS: dual-channel preflight, Intel source/downgrade checks, partial publication refusal and first Intel dispatch");
 } finally {
   server.closeAllConnections();
   await new Promise((done) => server.close(done));

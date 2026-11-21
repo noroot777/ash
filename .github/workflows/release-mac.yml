@@ -26,14 +26,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     if: github.ref == 'refs/heads/main'
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            runner: macos-15
+          - architecture: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
       NAVI_MAC_VERSION: ${{ inputs.version }}
       NAVI_MAC_SOURCE_SHA: ${{ inputs.source_sha }}
       NAVI_MAC_PUBLISH: ${{ inputs.publish }}
+      NAVI_MAC_ARCH: ${{ matrix.architecture }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -79,19 +88,67 @@ jobs:
       - name: Build app and seal original dmg
         if: steps.request.outputs.restore != 'true'
         run: node desktop/macos/scripts/cloud-workflow.mjs build
+      - name: Smoke native runtime, sqlite, terminal and server
+        run: node desktop/macos/scripts/smoke-distribution.mjs "$RUNNER_TEMP/navi-mac-release/payload/Navi.app"
       - name: Verify app signature and disk image
         run: node desktop/macos/scripts/cloud-workflow.mjs verify
       - name: Save original distribution before any publication
         if: steps.request.outputs.restore != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: mac-release-${{ github.run_id }}
+          name: mac-release-${{ github.run_id }}-${{ matrix.architecture }}
           path: ${{ runner.temp }}/navi-mac-release/bundle.tar
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+  publish:
+    if: inputs.publish && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        architecture: [arm64, x64]
+    env:
+      NAVI_MAC_VERSION: ${{ inputs.version }}
+      NAVI_MAC_SOURCE_SHA: ${{ inputs.source_sha }}
+      NAVI_MAC_PUBLISH: ${{ inputs.publish }}
+      NAVI_MAC_ARCH: ${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '26.13.1'
+          package-manager-cache: false
+      - name: Locate verified original distribution
+        id: request
+        run: node desktop/macos/scripts/cloud-workflow.mjs validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Require original distribution
+        env:
+          RESTORE: ${{ steps.request.outputs.restore }}
+        run: test "$RESTORE" = true
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download verified original distribution
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ steps.request.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/navi-mac-release
+      - name: Unpack and verify recovery artifact
+        run: node desktop/macos/scripts/cloud-workflow.mjs restore
       - name: Sign and publish release, feeds, and Mac download page
-        if: inputs.publish
         run: node desktop/macos/scripts/cloud-workflow.mjs publish
         env:
           GH_TOKEN: ${{ secrets.MAC_RELEASE_TOKEN }}

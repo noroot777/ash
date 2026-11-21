@@ -16,7 +16,8 @@ const temporary = mkdtempSync(join(tmpdir(), "navi-cloud-workflow-"));
 const root = join(temporary, "source");
 const runner = join(temporary, "runner");
 const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
-const config = { releaseRepo: "o/app", feedRepo: "o/feed", feedBranch: "main", appcastPath: "navi/mac/appcast.xml", tagPrefix: "navi-mac-v" };
+const config = { releaseRepo: "o/app", feedRepo: "o/feed", feedBranch: "main", appcastPath: "navi/mac/appcast.xml", tagPrefix: "navi-mac-v",
+  architectures: { x64: { appcastPath: "navi/mac/appcast-intel.xml", tagPrefix: "navi-mac-intel-v", legacyAppcastPath: null } } };
 function git(...args) {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8", env: cleanEnv });
   assert.equal(result.status, 0, result.stderr);
@@ -40,7 +41,7 @@ try {
     GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1", NAVI_MAC_VERSION: "0.3.2", NAVI_MAC_SOURCE_SHA: source,
     NAVI_MAC_PUBLISH: "true", RUNNER_TEMP: runner, GITHUB_OUTPUT: join(runner, "outputs") };
   for (const changed of [{ GITHUB_EVENT_NAME: "pull_request" }, { GITHUB_REF: "refs/heads/feature" },
-    { NAVI_MAC_SOURCE_SHA: "main; touch /tmp/never" }, { NAVI_MAC_VERSION: "0.3.2-beta" }, { NAVI_MAC_PUBLISH: "yes" }]) {
+    { NAVI_MAC_SOURCE_SHA: "main; touch /tmp/never" }, { NAVI_MAC_VERSION: "0.3.2-beta" }, { NAVI_MAC_PUBLISH: "yes" }, { NAVI_MAC_ARCH: "riscv64" }]) {
     assert.throws(() => workflowRequest({ ...env, ...changed }));
   }
   const state = { artifacts: [], releases: [], calls: [], feed: renderAppcast({ title: "test", link: "https://github.com/o/app", items: [renderItem({
@@ -87,6 +88,8 @@ try {
   writeFileSync(first.dmg, original);
   assert.throws(() => verifyBundle(directory, { ...request, source: "e".repeat(40) }), /source 不符/);
   assert.throws(() => verifyBundle(directory, { ...request, runId: "999" }), /runId 不符/);
+  assert.throws(() => verifyBundle(directory, { ...request, architecture: "x64" }), /architecture 不符/);
+  assert.throws(() => verifyBundle(directory, { ...request, buildNumber: "20261121.040507" }), /buildNumber 不符/);
 
   state.artifacts = [{ name: "mac-release-123", id: 42, expired: false }];
   const retry = await prepareWorkflow({ env: { ...env, GITHUB_RUN_ATTEMPT: "2" }, root, github, publicGithub: github });
@@ -108,6 +111,29 @@ try {
   assert.ok(state.calls.some((call) => call.endsWith("/releases?per_page=100&page=2")));
   console.log("PASS: cloud inputs and pinned source are checked; artifact restore preserves app symlinks/modes, build number and exact dmg; tampering/expired recovery is rejected");
 
+  state.feed = "";
+  state.releases = [];
+  state.artifacts = [{ name: "mac-release-123-arm64", id: 43, expired: false }];
+  const intelEnv = { ...env, NAVI_MAC_ARCH: "x64", GITHUB_OUTPUT: join(runner, "intel-outputs") };
+  const intelRequest = await prepareWorkflow({ env: intelEnv, root, github, publicGithub: github });
+  assert.equal(intelRequest.architecture, "x64");
+  assert.equal(intelRequest.buildNumber, "20261121.040506", "an ARM artifact cannot be restored for Intel");
+  const intelPlist = readFileSync(join(app, "Contents/Info.plist"), "utf8").replace("</dict>", "<key>NaviArchitecture</key><string>x64</string></dict>");
+  writeFileSync(join(app, "Contents/Info.plist"), intelPlist);
+  const intelDirectory = join(runner, "intel-bundle");
+  const intelManifest = buildBundle(intelDirectory, intelRequest, { root, build: false });
+  assert.equal(intelManifest.tag, "navi-mac-intel-v0.3.2-20261121.040506");
+  const intelBundle = verifyBundle(intelDirectory, intelRequest);
+  assert.ok(intelBundle.dmg.endsWith("Navi-0.3.2-20261121.040506-intel.dmg"));
+  state.artifacts.push({ name: "mac-release-123-x64", id: 44, expired: false });
+  const intelRetry = await prepareWorkflow({ env: { ...intelEnv, GITHUB_RUN_ATTEMPT: "2" }, root, github, publicGithub: github });
+  assert.equal(intelRetry.buildNumber, null);
+  assert.match(readFileSync(intelEnv.GITHUB_OUTPUT, "utf8"), /restore=true\nartifact_id=44/);
+  rmSync(join(intelDirectory, "payload"), { recursive: true });
+  assert.equal(restoreBundle(intelDirectory, intelRetry).manifest.architecture, "x64");
+  assert.throws(() => verifyBundle(intelDirectory, request), /architecture 不符/);
+  console.log("PASS: Intel artifacts, app metadata, dmg names and release tags are isolated from ARM; recovery never crosses architectures");
+
   const signing = { RUNNER_TEMP: runner, GH_TOKEN: "only-publish", MAC_SPARKLE_PRIVATE_KEY: "secret-key-material" };
   assert.throws(() => withSigningKey({ ...signing, GH_TOKEN: "" }, () => {}), /MAC_RELEASE_TOKEN/);
   let keyPath;
@@ -124,6 +150,15 @@ try {
   const project = fileURLToPath(new URL("..", import.meta.url));
   const workflow = readFileSync(join(project, ".github/workflows/release-mac.yml"), "utf8");
   assert.match(workflow, /runs-on: macos-15/);
+  assert.match(workflow, /architecture: arm64\n            runner: macos-15\n/);
+  assert.match(workflow, /architecture: x64\n            runner: macos-15-intel\n/);
+  assert.match(workflow, /runs-on: \$\{\{ matrix.runner \}\}/);
+  assert.match(workflow, /needs: build/);
+  assert.match(workflow, /max-parallel: 1/);
+  assert.match(workflow, /name: mac-release-\$\{\{ github.run_id \}\}-\$\{\{ matrix.architecture \}\}/);
+  const buildJob = workflow.split(/^  publish:\n/m)[0];
+  assert.doesNotMatch(buildJob, /MAC_SPARKLE_PRIVATE_KEY: \$\{\{ secrets\./);
+  assert.match(buildJob, /smoke-distribution\.mjs/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /retention-days: 1/);
   assert.match(workflow, /node-version: '26\.13\.1'\n          package-manager-cache: false/);
@@ -134,7 +169,7 @@ try {
   }
   assert.doesNotMatch(workflow, /^\s+(push|pull_request|pull_request_target):/m);
   assert.ok(workflow.indexOf("Save original distribution") < workflow.indexOf("MAC_SPARKLE_PRIVATE_KEY: ${{ secrets."));
-  assert.equal([...workflow.matchAll(/uses: actions\/[^@]+@([a-f0-9]{40})/g)].length, 5);
+  assert.equal([...workflow.matchAll(/uses: actions\/[^@]+@([a-f0-9]{40})/g)].length, 9);
   console.log("PASS: signing key is private, excluded from child environment/artifacts, and cleaned on failure; workflow pins actions and saves recovery before injecting secrets");
 } finally {
   rmSync(temporary, { recursive: true, force: true });

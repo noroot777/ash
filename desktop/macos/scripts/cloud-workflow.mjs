@@ -8,6 +8,8 @@ import { compareVersions } from "./appcast.mjs";
 import { appDigest, appInfo, packApp } from "./release-artifacts.mjs";
 import { GitHub } from "./github.mjs";
 import { assertVersion, itemDetails, latestItem, nextBuildNumber, readConfig, runName, sourceVersion } from "./release-state.mjs";
+import { architectureConfig, assertArchitecture, distributionName, recoveryName } from "./architecture.mjs";
+import { verifyNativeArchitecture } from "./smoke-distribution.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const MAC = join(ROOT, "desktop/macos");
@@ -27,12 +29,12 @@ export function workflowRequest(env) {
   assert.match(env.GITHUB_RUN_ATTEMPT ?? "", /^\d+$/, "需要工作流尝试编号");
   assert.ok(["true", "false"].includes(env.NAVI_MAC_PUBLISH), "publish 只能是 true 或 false");
   return { version: assertVersion(env.NAVI_MAC_VERSION), source: env.NAVI_MAC_SOURCE_SHA,
-    runId: env.GITHUB_RUN_ID, publish: env.NAVI_MAC_PUBLISH === "true" };
+    architecture: assertArchitecture(env.NAVI_MAC_ARCH || "arm64"), runId: env.GITHUB_RUN_ID, publish: env.NAVI_MAC_PUBLISH === "true" };
 }
 
 export async function prepareWorkflow({ env = process.env, root = ROOT, github, publicGithub } = {}) {
   const request = workflowRequest(env);
-  const config = readConfig(join(root, "desktop/macos/release.json"));
+  const config = architectureConfig(readConfig(join(root, "desktop/macos/release.json")), request.architecture);
   assert.equal(env.GITHUB_REPOSITORY, config.releaseRepo, "工作流仓库与发版配置不同");
   assert.equal(run("git", ["merge-base", "--is-ancestor", request.source, "origin/main"], { cwd: root }), "");
   const buildScript = run("git", ["show", `${request.source}:desktop/macos/build.sh`], { cwd: root });
@@ -45,7 +47,8 @@ export async function prepareWorkflow({ env = process.env, root = ROOT, github, 
   assert.equal(metadata.head_branch, "main");
   assert.equal(metadata.display_title, runName(request.version, request.source, request.publish), "工作流名称与发布参数不符");
   const artifacts = (await github.call("GET", `${base}/artifacts?per_page=100`)).json.artifacts ?? [];
-  const artifact = artifacts.find((entry) => entry.name === `mac-release-${request.runId}`);
+  const artifact = artifacts.find((entry) => entry.name === recoveryName(request.runId, request.architecture))
+    ?? (request.architecture === "arm64" ? artifacts.find((entry) => entry.name === `mac-release-${request.runId}`) : null);
   if (artifact?.expired) throw new Error("原始恢复产物已经过期，停止发布；请发一个新版本，不能同号覆盖或重封旧包。");
   const feed = await publicGithub.readFile(config.feedRepo, config.appcastPath, config.feedBranch);
   const latest = itemDetails(latestItem(feed?.text));
@@ -73,15 +76,19 @@ export function verifyBundle(directory, expected) {
   const payload = join(directory, "payload");
   const manifest = JSON.parse(readFileSync(join(payload, "manifest.json"), "utf8"));
   for (const field of ["version", "source", "runId", "publish"]) assert.equal(manifest[field], expected[field], `恢复产物 ${field} 不符`);
+  const architecture = assertArchitecture(manifest.architecture ?? "arm64");
+  assert.equal(architecture, expected.architecture ?? "arm64", "恢复产物 architecture 不符");
+  if (expected.buildNumber) assert.equal(manifest.buildNumber, expected.buildNumber, "恢复产物 buildNumber 不符");
   assert.match(manifest.buildNumber, /^\d{8}\.\d{6,}$/);
   const app = join(payload, "Navi.app");
   const info = appInfo(app);
   assert.equal(info.CFBundleShortVersionString, manifest.version);
   assert.equal(info.CFBundleVersion, manifest.buildNumber);
+  assert.equal(info.NaviArchitecture ?? "arm64", architecture, "app 架构与恢复清单不符");
   assert.ok(manifest.source.startsWith(info.NaviSourceCommit) && /^[a-f0-9]{7,40}$/.test(info.NaviSourceCommit));
   assert.equal(appDigest(app), manifest.appDigest, "app 内容与恢复清单不符");
   assert.match(manifest.tag, /^[\w.-]+$/);
-  const name = `Navi-${manifest.version}-${manifest.buildNumber}.dmg`;
+  const name = distributionName(manifest.version, manifest.buildNumber, architecture);
   const dmg = join(payload, "artifacts", manifest.tag, name);
   assert.equal(sha256(dmg), manifest.dmgSha256, "dmg 与保存的原包不同");
   assert.equal(readFileSync(`${dmg}.source`, "utf8").trim(), manifest.appDigest);
@@ -89,12 +96,12 @@ export function verifyBundle(directory, expected) {
 }
 
 export function buildBundle(directory, request, { root = ROOT, build = true } = {}) {
-  const config = readConfig(join(root, "desktop/macos/release.json"));
+  const config = architectureConfig(readConfig(join(root, "desktop/macos/release.json")), request.architecture ?? "arm64");
   assert.ok(request.buildNumber, "首次构建必须已经分配构建号");
   assert.equal(run("git", ["rev-parse", "HEAD"], { cwd: root }), request.source, "未检出要求的源码提交");
   assert.equal(sourceVersion(readFileSync(join(root, "desktop/macos/build.sh"), "utf8")), request.version);
   if (build) run("bash", [join(root, "desktop/macos/build.sh")], {
-    cwd: root, stdio: "inherit", env: { ...process.env, NAVI_MAC_BUILD_NUMBER: request.buildNumber },
+    cwd: root, stdio: "inherit", env: { ...process.env, NAVI_MAC_BUILD_NUMBER: request.buildNumber, NAVI_MAC_ARCH: config.architecture },
   });
   const payload = join(directory, "payload");
   if (existsSync(payload)) throw new Error("恢复产物目录已存在，不能覆盖后重新封包");
@@ -102,7 +109,7 @@ export function buildBundle(directory, request, { root = ROOT, build = true } = 
   const app = join(payload, "Navi.app");
   cpSync(join(root, "desktop/macos/build/Navi.app"), app, { recursive: true, verbatimSymlinks: true });
   const tag = `${config.tagPrefix}${request.version}-${request.buildNumber}`;
-  const dmg = packApp(app, join(payload, "artifacts", tag), `Navi-${request.version}-${request.buildNumber}.dmg`);
+  const dmg = packApp(app, join(payload, "artifacts", tag), distributionName(request.version, request.buildNumber, config.architecture));
   const manifest = { ...request, tag, appDigest: appDigest(app), dmgSha256: sha256(dmg) };
   writeFileSync(join(payload, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   verifyBundle(directory, request);
@@ -120,6 +127,7 @@ export function verifyDistribution(directory, request) {
   const bundle = verifyBundle(directory, request);
   run("codesign", ["--verify", "--deep", "--strict", bundle.app], { stdio: "inherit" });
   run("hdiutil", ["verify", bundle.dmg], { stdio: "inherit" });
+  verifyNativeArchitecture(bundle.app, request.architecture ?? "arm64");
   return bundle;
 }
 

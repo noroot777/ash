@@ -31,12 +31,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readEnv } from "../../../scripts/env.mjs";
 import { sealRuntime } from "./runtime-store.mjs";
+import { ARCHITECTURES, NODE_VERSION, buildArchitecture } from "./architecture.mjs";
 
-// 升级 node：改这三行，sha256 取 https://nodejs.org/dist/<版本>/SHASUMS256.txt 里对应那一行。
-// ≥22.16 才有内置的 node:sqlite；shared 跑 .ts 源码还要默认开着的类型擦除。
-const NODE_VERSION = "v26.13.1";
-const NODE_ARCHIVE = `node-${NODE_VERSION}-darwin-arm64.tar.xz`;
-const NODE_SHA256 = "af6202f5370a3a5209e85dc543758dfd9f44c8726626a236730cd603a67a8559";
+const architecture = buildArchitecture();
+const NODE_ARCHIVE = `node-${NODE_VERSION}-darwin-${architecture}.tar.xz`;
+const NODE_SHA256 = ARCHITECTURES[architecture].checksum;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../..");
@@ -102,7 +101,7 @@ const npmCli = join(nodeHome, "lib", "node_modules", "npm", "bin", "npm-cli.js")
 // ── 3. 生产依赖（node-pty 按这份 node 重编）──────────────────────────────
 const manifests = ["package.json", "package-lock.json", ...WORKSPACES.map((w) => `${w}/package.json`), "server/scripts/prepare-node-pty.mjs"];
 const depsKey = createHash("sha256")
-  .update(`${NODE_VERSION}\nnode-pty: node-gyp --nodedir\n`)
+  .update(`${NODE_VERSION}\n${architecture}\nnode-pty: node-gyp --nodedir\n`)
   .update(manifests.map((m) => `${m}\n${readFileSync(join(REPO, m), "utf8")}`).join("\n"))
   .digest("hex").slice(0, 16);
 const deps = join(CACHE, `deps-${depsKey}`);
@@ -154,6 +153,7 @@ rmSync(join(APP, "node_modules", "@navi", "web"), { force: true });
 // ── 5. 自检：拿打进去的那份 node，从打进去的那份目录里加载 ──────────────────────
 const smoke = spawnSync(join(APP, "node", "bin", "node"), ["--input-type=module", "-e", `
   await import("node:sqlite");
+  if (process.arch !== ${JSON.stringify(architecture)}) process.exit(4);
   const pty = (await import("node-pty")).default;
   const mcp = await import("@navi/shared/mcp");
   if (!mcp.NAVI_MCP_SERVER_NAME || typeof pty.spawn !== "function") process.exit(3);
