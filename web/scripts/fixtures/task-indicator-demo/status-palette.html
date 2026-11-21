@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>状态圆点 · 真实颜色与动效对照</title>
+  <title>全部状态圆点 · 4px / 7px 最终尺寸对照</title>
   <style>
     * { box-sizing: border-box; }
     :root {
@@ -23,7 +23,7 @@
       --faint: lch(48% 3 282); --micro: #a0a6c5;
     }
     body { margin: 0; padding: 34px 24px; }
-    main { max-width: 1120px; margin: auto; }
+    main { max-width: 1000px; margin: auto; }
     h1 { font-size: 26px; letter-spacing: -.6px; margin: 0 0 10px; }
     h2 { font-size: 14px; margin: 0; }
     p { font-size: 13px; line-height: 1.8; color: var(--muted); }
@@ -33,8 +33,11 @@
     button:hover { background: var(--raised); }
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
     .hint { min-height: 23px; margin: 0 0 20px; font-size: 12px; }
-    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 20px; align-items: start; }
+    .layout { display: grid; grid-template-columns: repeat(2, minmax(0, 360px)); gap: 24px; justify-content: center; align-items: start; }
     .panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+    .palette-panel { margin-top: 22px; }
+    summary { cursor: pointer; font-size: 13px; padding: 15px 18px; }
+    summary:hover { background: var(--raised); }
     .panel-heading { padding: 17px 18px; border-bottom: 1px solid var(--line); }
     .panel-heading p { font-size: 12px; margin: 6px 0 0; }
     .table-scroll { overflow-x: auto; }
@@ -48,66 +51,67 @@
     td.motion { font-size: 11px; color: var(--muted); }
     .sample { display: grid; place-items: center; width: 32px; height: 26px; }
     .zoom { transform: scale(4); display: grid; place-items: center; }
-    .dot { display: block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-    .small .dot { width: 5px; height: 5px; }
+    .size-4 { --dot-size: 4px; --ring-width: 1px; }
+    .size-7 { --dot-size: 7px; --ring-width: 1.5px; }
+    .dot { display: block; width: var(--dot-size); height: var(--dot-size); border-radius: 50%; flex-shrink: 0; }
     .run { background: var(--accent); animation: pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
     .hold { background: var(--accent); }
     .wait { background: var(--amber); }
     .bad { background: var(--red); }
     .new { background: var(--green); }
-    .queue { box-shadow: inset 0 0 0 1.5px var(--faint); }
-    .stalled { background: color-mix(in oklab, var(--red) 16%, transparent); box-shadow: inset 0 0 0 1.5px var(--red); }
-    .open { background: color-mix(in oklab, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1.5px var(--accent); }
-    .small .queue { box-shadow: inset 0 0 0 1px var(--faint); }
-    .small .stalled { box-shadow: inset 0 0 0 1px var(--red); }
-    .small .open { box-shadow: inset 0 0 0 1px var(--accent); }
-    .dot.micro, .small .dot.micro { width: 4px; height: 4px; background: var(--micro); }
+    .queue { box-shadow: inset 0 0 0 var(--ring-width) var(--faint); }
+    .stalled { background: color-mix(in oklab, var(--red) 16%, transparent); box-shadow: inset 0 0 0 var(--ring-width) var(--red); }
+    .open { background: color-mix(in oklab, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 var(--ring-width) var(--accent); }
+    .micro { background: var(--micro); }
     .candidate { background: var(--raised); }
     .color-code { font: 10px ui-monospace, monospace; color: var(--muted); }
     @keyframes pulse { 0%, 100% { opacity: .68; transform: scale(.84); } 50% { opacity: 1; transform: scale(1.18); } }
     :root[data-motion="reduce"] .run { animation: none; }
     @media (prefers-reduced-motion: reduce) { :root:not([data-motion="full"]) .run { animation: none; } }
     .tasks { padding: 9px; background: var(--raised); }
-    .task { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 6px; font-size: 12px; }
+    .task { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 6px; font-size: 13px; }
+    .task-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .leading { display: grid; place-items: center; width: 22px; flex: 0 0 22px; }
-    .task small { margin-left: auto; color: var(--muted); font-size: 10px; }
+    .task small { margin-left: auto; color: var(--muted); font-size: 10px; white-space: nowrap; }
     .aside-note { margin: 0; padding: 14px 18px; border-top: 1px solid var(--line); font-size: 12px; }
     .notes { margin-top: 18px; font-size: 12px; }
     .notes a { text-underline-offset: 3px; }
-    @media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+    @media (max-width: 640px) { .layout { grid-template-columns: minmax(0, 360px); } }
     @media (max-width: 540px) { body { padding: 22px 12px; } h1 { font-size: 23px; } th, td { padding: 12px 7px; } }
   </style>
 </head>
 <body>
   <main>
-    <h1>这次，直接看颜色和动效。</h1>
-    <p>现有侧栏圆点按当前源码的颜色、尺寸和呼吸节奏还原；最后一行是你选的「微实心」。右侧放在同一张任务列表里比较。</p>
+    <h1>全套 4px，还是全套 7px？</h1>
+    <p>左右是同一批任务，只改圆点尺寸。所有状态都一起缩放，包括你选的蓝灰微实心；颜色、呼吸节奏、行高和标题位置完全一致。</p>
     <div class="toolbar">
       <button id="theme" type="button" aria-pressed="false">切换深色</button>
       <button id="motion" type="button" aria-pressed="false">关闭呼吸动效</button>
-      <button id="size" type="button" aria-pressed="false">右侧切换 5px 小号</button>
+      <button id="density" type="button" aria-pressed="false">看更多待验收任务</button>
     </div>
     <p class="hint" id="hint" role="status"></p>
     <div class="layout">
-      <section class="panel" aria-labelledby="palette-heading">
-        <div class="panel-heading">
-          <h2 id="palette-heading">现有全部侧栏状态 ＋ 微实心候选</h2>
-          <p>7px / 5px 是现有尺寸；微实心始终 4px。放大列也保留真实动效。</p>
-        </div>
-        <div class="table-scroll">
-          <table>
-            <thead><tr><th scope="col">状态</th><th scope="col">7px</th><th scope="col">5px</th><th scope="col">4×</th><th scope="col">颜色</th><th scope="col">动效</th></tr></thead>
-            <tbody id="palette"></tbody>
-          </table>
-        </div>
+      <section class="panel size-4" aria-labelledby="four-heading">
+        <div class="panel-heading"><h2 id="four-heading">4px · 全部状态一起缩小</h2><p>运行、等后台、待验收、失败、空心环都是 4px。</p></div>
+        <div class="tasks" id="tasks-4"></div>
+        <p class="aside-note">实心点 4px；空心环 4px / 1px 环线。行首仍保留同样的 22px 槽位。</p>
       </section>
-      <section class="panel" aria-labelledby="list-heading">
-        <div class="panel-heading"><h2 id="list-heading">放到一起，会不会认错？</h2><p>最接近：主色实心「等后台」与蓝灰「微实心」。</p></div>
-        <div class="tasks" id="tasks"></div>
-        <p class="aside-note">微实心是静态蓝灰点，不跟运行状态一起呼吸。关闭动效后，也可以比较两者是否仍能区分。</p>
+      <section class="panel size-7" aria-labelledby="seven-heading">
+        <div class="panel-heading"><h2 id="seven-heading">7px · 全部状态统一大尺寸</h2><p>同样的颜色与形状，蓝灰待验收也放大到 7px。</p></div>
+        <div class="tasks" id="tasks-7"></div>
+        <p class="aside-note">实心点 7px；空心环 7px / 1.5px 环线。标题、间距和行高不变。</p>
       </section>
     </div>
-    <p class="notes">颜色与动效依据：task-status-dot.css / global.css；这是独立演示，不修改正式界面和真实任务。<a href="index.html">返回五种圆点方案</a></p>
+    <details class="panel palette-panel">
+      <summary>展开完整图例：每种状态的 4px / 7px，以及各自 4 倍放大</summary>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">状态</th><th scope="col">4px</th><th scope="col">7px</th><th scope="col">4px 放大</th><th scope="col">7px 放大</th><th scope="col">颜色</th><th scope="col">动效</th></tr></thead>
+          <tbody id="palette"></tbody>
+        </table>
+      </div>
+    </details>
+    <p class="notes">呼吸点标的是基础直径，动画缩放比例仍与正式界面相同；4px 空心环适配为 1px 环线，避免糊成实心。<br>待验收都用已选的蓝灰实心，旧圆环仅保留在展开图例中作参照。仅更新独立 demo，正式界面和真实任务未修改。<a href="index.html">返回五种圆点方案</a></p>
   </main>
   <script>
     const statuses = [
@@ -118,33 +122,35 @@
       { name: "已验收，有未读动态", mark: "new", color: "green", tone: "绿", motion: "静止" },
       { name: "排队 / 等前置 / 等开工", mark: "queue", color: "faint", tone: "灰", motion: "静止" },
       { name: "卡在模型上游", mark: "stalled", color: "red", tone: "红环", motion: "静止" },
-      { name: "待验收 · 现有", mark: "open", color: "accent", tone: "靛蓝环", motion: "静止" },
+      { name: "待验收 · 旧圆环参照", mark: "open", color: "accent", tone: "靛蓝环", motion: "静止" },
       { name: "尚未开始 / 验收后已读", mark: null, tone: "不画点", motion: "—" },
-      { name: "待验收 · 微实心候选", mark: "micro", color: "micro", tone: "蓝灰", motion: "静止" }
+      { name: "待验收 · 蓝灰实心", mark: "micro", color: "micro", tone: "蓝灰", motion: "静止" }
     ];
     const taskRows = [
       ["run", "优化任务加载", "运行中"], ["hold", "等待验收检查", "等后台"],
-      ["micro", "排查登录回调", "待验收 · 新"], ["micro", "调整详情留白", "待验收 · 新"],
+      ["micro", "排查登录回调", "待验收"], ["micro", "调整详情留白", "待验收"],
       ["wait", "确认发布配置", "等答复"], ["bad", "修复构建失败", "失败"],
       ["new", "统一按钮尺寸", "验收后未读"], ["queue", "补齐接口文档", "排队中"],
-      ["stalled", "等待模型输出", "卡在上游"], ["open", "整理结果提示", "待验收 · 旧"],
-      ["micro", "修复附件预览", "待验收 · 新"], [null, "整理设置入口", "验收后已读"]
+      ["stalled", "等待模型输出", "卡在上游"], ["micro", "整理结果提示", "待验收"],
+      ["micro", "修复附件预览", "待验收"], [null, "整理设置入口", "验收后已读"]
     ];
+    const extraTitles = ["修复侧栏滚动", "优化长标题截断", "调整项目切换", "优化终端连接提示", "补齐空列表占位", "修复搜索焦点", "调整消息时间", "整理任务归档"];
     const reducedPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
     let motionOff = reducedPreference.matches;
     let motionChosen = false;
+    let dense = false;
     function make(tag, className, text) {
       const node = document.createElement(tag);
       if (className) node.className = className;
       if (text) node.textContent = text;
       return node;
     }
-    function specimen(mark, mode) {
-      const stage = make("span", `sample ${mode === "small" ? "small" : ""}`);
+    function specimen(mark, size, zoomed = false) {
+      const stage = make("span", `sample size-${size}`);
       stage.setAttribute("aria-hidden", "true");
       if (mark) {
         const dot = make("span", `dot ${mark}`);
-        if (mode === "zoom") { const zoom = make("span", "zoom"); zoom.append(dot); stage.append(zoom); }
+        if (zoomed) { const zoom = make("span", "zoom"); zoom.append(dot); stage.append(zoom); }
         else stage.append(dot);
       }
       return stage;
@@ -154,7 +160,9 @@
       document.getElementById("palette").replaceChildren(...statuses.map(status => {
         const row = make("tr", status.mark === "micro" ? "candidate" : "");
         row.append(make("td", "", status.name));
-        for (const size of ["normal", "small", "zoom"]) { const cell = make("td"); cell.append(specimen(status.mark, size)); row.append(cell); }
+        for (const [size, zoomed] of [[4, false], [7, false], [4, true], [7, true]]) {
+          const cell = make("td"); cell.append(specimen(status.mark, size, zoomed)); row.append(cell);
+        }
         const color = make("td", "", status.tone);
         if (status.color) color.append(make("div", "color-code", colors.getPropertyValue(`--${status.color}`).trim()));
         row.append(color, make("td", "motion", status.mark === "run" && motionOff ? "已关闭呼吸" : status.motion));
@@ -170,14 +178,19 @@
         : "只有「运行中 / 审查中」在呼吸，周期 1.35 秒；其他点保持静止。";
       renderPalette();
     }
-    document.getElementById("tasks").replaceChildren(...taskRows.map(([mark, title, label]) => {
-      const row = make("div", "task");
-      const leading = make("span", "leading");
-      if (mark) leading.append(make("span", `dot ${mark}`));
-      leading.setAttribute("aria-hidden", "true");
-      row.append(leading, make("span", "", title), make("small", "", label));
-      return row;
-    }));
+    function renderTasks() {
+      const rows = dense ? [...taskRows, ...extraTitles.map(title => ["micro", title, "待验收"])] : taskRows;
+      for (const size of [4, 7]) {
+        document.getElementById(`tasks-${size}`).replaceChildren(...rows.map(([mark, title, label]) => {
+          const row = make("div", "task");
+          const leading = make("span", "leading");
+          if (mark) leading.append(make("span", `dot ${mark}`));
+          leading.setAttribute("aria-hidden", "true");
+          row.append(leading, make("span", "task-title", title), make("small", "", label));
+          return row;
+        }));
+      }
+    }
     document.getElementById("theme").onclick = () => {
       const dark = document.documentElement.dataset.theme !== "dark";
       document.documentElement.dataset.theme = dark ? "dark" : "light";
@@ -186,12 +199,14 @@
       renderPalette();
     };
     document.getElementById("motion").onclick = () => { motionChosen = true; motionOff = !motionOff; updateMotion(); };
-    document.getElementById("size").onclick = () => {
-      const small = document.getElementById("tasks").classList.toggle("small");
-      document.getElementById("size").textContent = small ? "右侧切换 7px 标准" : "右侧切换 5px 小号";
-      document.getElementById("size").setAttribute("aria-pressed", String(small));
+    document.getElementById("density").onclick = () => {
+      dense = !dense;
+      document.getElementById("density").textContent = dense ? "回到短列表" : "看更多待验收任务";
+      document.getElementById("density").setAttribute("aria-pressed", String(dense));
+      renderTasks();
     };
     reducedPreference.addEventListener("change", event => { if (!motionChosen) { motionOff = event.matches; updateMotion(); } });
+    renderTasks();
     updateMotion();
   </script>
 </body>
