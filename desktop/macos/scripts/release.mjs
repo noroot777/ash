@@ -211,7 +211,7 @@ async function main() {
   } else {
     const put = await putOnRelease(github, config, {
       tag, commit, dmg, length,
-      name: `Navi for macOS ${shortVersion}（${version}）`,
+      name: `Navi for macOS ${shortVersion}`,
       body: `${notes.text}\n\n安装：下载 ${dmgName}，打开后把 Navi（Navi.app）拖进 Applications。第一次打开被系统拦住时的处理见 https://github.com/${config.releaseRepo}#下载-mac-版`
         + `\n\n装着改名前的 Ash.app：装法一样，装好打开一次 Navi，它会接过 Ash 的设置、数据和登录项，把 Ash.app 移到废纸篓。`,
     });
@@ -229,7 +229,7 @@ async function main() {
     url, shortVersion, version, commit,
     page: `https://github.com/${config.releaseRepo}/releases/tag/${tag}`,
   });
-  say(`✓ 已发 ${shortVersion}（${version}）`);
+  say(`✓ 已发 ${shortVersion}`);
   say(`  包：${url}`);
   say(`  appcast：${local ? appcastPath : feedOf(config)}`);
   if (!local) {

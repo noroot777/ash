@@ -31,7 +31,7 @@
     "install:mac": "bash desktop/macos/build.sh --install",
     "release:mac": "node desktop/macos/scripts/cloud-release.mjs",
     "release:mac:local": "node desktop/macos/scripts/release.mjs",
-    "test:release:mac": "node scripts/test-macos-cloud-release.mjs && node scripts/test-macos-download-page.mjs && node scripts/test-macos-cloud-workflow.mjs && node scripts/test-macos-release.mjs",
+    "test:release:mac": "node scripts/test-macos-cloud-release.mjs && node scripts/test-macos-download-page.mjs && node scripts/test-macos-cloud-workflow.mjs && node scripts/test-macos-release.mjs && node scripts/test-macos-version-display.mjs",
     "restart": "node scripts/restart.mjs",
     "stop": "node scripts/stop.mjs",
     "upgrade": "node scripts/upgrade.mjs",

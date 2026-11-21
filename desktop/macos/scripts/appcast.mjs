@@ -45,7 +45,7 @@ const escape = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;
 export function renderItem({ version, shortVersion, url, length, signature, minimumSystemVersion, notes, pubDate, commit }) {
   const lines = [
     "<item>",
-    `  <title>${escape(`${shortVersion}（${version}）`)}</title>`,
+    `  <title>${escape(shortVersion)}</title>`,
     `  <pubDate>${escape(pubDate.toUTCString())}</pubDate>`,
     `  <sparkle:version>${escape(version)}</sparkle:version>`,
     `  <sparkle:shortVersionString>${escape(shortVersion)}</sparkle:shortVersionString>`,
@@ -67,7 +67,7 @@ export function renderItem({ version, shortVersion, url, length, signature, mini
 export function renderInformationalItem({ version, shortVersion, link, minimumSystemVersion, notes, pubDate }) {
   return [
     "<item>",
-    `  <title>${escape(`Navi ${shortVersion}（${version}）`)}</title>`,
+    `  <title>${escape(`Navi ${shortVersion}`)}</title>`,
     `  <pubDate>${escape(pubDate.toUTCString())}</pubDate>`,
     `  <sparkle:version>${escape(version)}</sparkle:version>`,
     `  <sparkle:shortVersionString>${escape(shortVersion)}</sparkle:shortVersionString>`,

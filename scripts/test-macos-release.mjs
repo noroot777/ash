@@ -127,10 +127,15 @@ async function localRehearsal() {
   verifyDownload(readFileSync(first), signature, key.publicKey);
   assert.equal(verify(first, signature), 0, "the dmg verifies against the signature in the appcast");
   assert.equal(verify(join(feed, "appcast.xml")), 0, "the appcast itself is signed");
+  assert.match(appcast(), /<title>0\.2\.0<\/title>/);
+  assert.match(appcast(), /<sparkle:version>20000101\.0001<\/sparkle:version>/);
+  assert.match(appcast(), /<sparkle:shortVersionString>0\.2\.0<\/sparkle:shortVersionString>/);
   assert.match(appcast(), /url="http:\/\/127\.0\.0\.1:1\/Navi-0\.2\.0-20000101\.0001\.dmg"/);
   assert.equal(Number(appcast().match(/length="(\d+)"/)[1]), readFileSync(first).length);
   const legacy = () => readFileSync(join(feed, "legacy-appcast.xml"), "utf8");
   assert.equal(verify(join(feed, "legacy-appcast.xml")), 0, "the notice for pre-rename apps is signed too (they require a signed feed)");
+  assert.match(legacy(), /<title>Navi 0\.2\.0<\/title>/);
+  assert.match(legacy(), /<sparkle:version>20000101\.0001<\/sparkle:version>/);
   assert.match(legacy(), /<sparkle:informationalUpdate><\/sparkle:informationalUpdate>/);
   assert.doesNotMatch(legacy(), /<enclosure/, "nothing to install: Ash.app cannot install a bundle with another identifier");
   assert.match(legacy(), /<link>http:\/\/127\.0\.0\.1:1\/Navi-0\.2\.0-20000101\.0001\.dmg<\/link>/);
@@ -406,7 +411,7 @@ async function formalRehearsal() {
   assert.ok(github.state.calls.includes(`GET /assets/${release.assets[0].id}`), "the uploaded dmg is read back before the release goes public");
   assert.equal(release.target, sha, "the tag is created on the commit the app was built from");
   assert.equal(github.state.tags["o/app:navi-mac-v0.2.0-20000102.0001"], sha);
-  assert.match(release.name, /macOS/);
+  assert.equal(release.name, "Navi for macOS 0.2.0");
   assert.equal(release.assets[0].name, "Navi-0.2.0-20000102.0001.dmg");
   assert.equal(release.assets[0].contentType, "application/x-apple-diskimage");
   assert.ok(release.body.startsWith("正式 & <b>演练</b>\n\n"), "the release body starts with the notes as given");
@@ -431,6 +436,7 @@ async function formalRehearsal() {
   const channel = github.state.releases.find((entry) => entry.tag_name === "navi-mac-latest");
   assert.ok(channel.body.includes(url), "fixed download page points at the verified, immutable dmg");
   assert.equal(channel.make_latest, "false");
+  assert.match(channel.body, /^## Navi 0\.2\.0$/m);
   assert.equal(channel.assets.length, 0, "the channel never duplicates or replaces a dmg");
   assert.ok(readFileSync(readme, "utf8").includes("第一版还没发布"), "publishing leaves the README untouched");
   assert.equal(git("log", "-1", "--format=%s"), "init");

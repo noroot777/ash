@@ -164,7 +164,9 @@ enum MainMenu {
 
   private static func appMenu() -> NSMenu {
     let menu = NSMenu(title: "Navi")
-    menu.addItem(item("关于 Navi", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+    let about = item("关于 Navi", #selector(AboutPanel.show(_:)))
+    about.target = AboutPanel.shared
+    menu.addItem(about)
     if let target = AppUpdater.shared.menuTarget {
       let check = item("检查更新…", #selector(SPUStandardUpdaterController.checkForUpdates(_:)))
       check.target = target

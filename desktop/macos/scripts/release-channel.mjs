@@ -17,7 +17,7 @@ export async function updateDownloadChannel(github, config, release) {
     `<!-- navi-mac-build:${release.version} -->`,
     "此页是 Mac 最新稳定版的固定下载入口，不代表此页 tag 的源码版本。",
     "",
-    `## Navi ${release.shortVersion}（${release.version}）`,
+    `## Navi ${release.shortVersion}`,
     "",
     `**[下载 Mac 安装包（Apple 芯片）](${release.url})**`,
     "",

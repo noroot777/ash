@@ -34,7 +34,7 @@ export async function initializeDownloadPage(github, config, { check = false, fe
   const signature = item.xml.match(/sparkle:edSignature="([^"]+)"/)?.[1];
   assert.ok(signature, "更新源缺少 EdDSA 签名");
   verifyDownload(bytes, signature, config.publicKey);
-  if (check) return `已验证现有 Mac ${latest.shortVersion}（${latest.version}），未修改下载页`;
+  if (check) return `已验证现有 Mac ${latest.shortVersion}，未修改下载页`;
   return updateDownloadChannel(github, config, { ...latest, page: `https://github.com/${config.releaseRepo}/releases/tag/${tag}` });
 }
 

@@ -36,6 +36,9 @@ assert.match(await updateDownloadChannel(github, config, candidate), /下载页�
 assert.equal(state.writes[0].method, "POST");
 assert.equal(state.channel.tag_name, config.downloadTag);
 assert.equal(state.channel.make_latest, "false");
+assert.match(state.channel.body, /^## Navi 0\.3\.2$/m);
+assert.ok(state.channel.body.includes(`<!-- navi-mac-build:${version} -->`), "internal channel identity is preserved");
+assert.doesNotMatch(state.channel.body, /^## .*2026/m);
 assert.ok(state.channel.body.includes(url));
 assert.equal(state.channel.target_commitish, commit);
 const body = state.channel.body;
@@ -64,7 +67,7 @@ console.log("PASS: Mac-only fixed page is idempotent, never changes historical a
 
 const fetchDownload = async (address) => { assert.equal(address, url); return new Response(bytes); };
 const count = state.writes.length;
-assert.match(await initializeDownloadPage(github, config, { check: true, fetchDownload }), /已验证现有 Mac/);
+assert.equal(await initializeDownloadPage(github, config, { check: true, fetchDownload }), "已验证现有 Mac 0.3.2，未修改下载页");
 assert.equal(state.writes.length, count);
 await initializeDownloadPage(github, config, { fetchDownload });
 await assert.rejects(initializeDownloadPage(github, config, { fetchDownload: async () => new Response("tampered") }), /下载大小/);

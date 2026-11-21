@@ -169,6 +169,8 @@ desktop/macos/build/cache/Sparkle-*/bin/generate_keys --account dev.navi.mac -x 
 
 工作流使用标准 Apple Silicon `macos-15` runner，从指定的完整 SHA 构建，只接受 main 上的源码及与源码一致的版本，不因普通 push 或 PR 自动发布。构建号基于工作流创建时间和当前更新源分配，始终比已有构建号大；发布串行执行，不取消进行中的任务。
 
+「关于 Navi」、更新提示标题、Release 标题和固定下载页标题只显示 `0.3.2` 这样的版本号，不附带日期构建号。内部 `CFBundleVersion`、更新源的排序编号以及安装包文件名和 tag 仍保留构建号，用于更新比较和精确恢复；历史安装包不改名。
+
 构建和安装依赖时没有发布凭证。原始 app、dmg、内容摘要和构建号在对外发布前封进一个恢复产物，保留一天；tar 保留软链及可执行位。重跑优先恢复这份原包，不换构建号、不重封同号 dmg。原产物已过期或缺失且已有对应 Release 时停止，改发新版本，不覆盖历史包。Actions 中显示的失败阶段就是恢复入口。
 
 随后沿用原有事务：核对私钥与 app 公钥、更新源、源码提交及 tag → 草稿 Release → 上传 dmg → 经 API 下回校验 → 公开且核对 tag → 从公开地址下回校验 → 签名并提交主 appcast → 签名并提交旧 Ash 的通知 appcast → 更新 Mac 固定下载页。清单提交带原文件 SHA，冲突时拒绝覆盖。包公开后不撤回，重跑只补缺失步骤；固定下载页失败也算发布失败。raw.githubusercontent 的几分钟缓存可能延后客户端看到更新。
