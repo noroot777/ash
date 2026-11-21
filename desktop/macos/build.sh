@@ -65,6 +65,7 @@ SPARKLE="$(node "$HERE/scripts/sparkle.mjs")"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+cp "$HERE/../../docs/logo/loader.svg" "$APP/Contents/Resources/loader.svg"
 
 swiftc -O -swift-version 5 -target arm64-apple-macos14.0 \
   -framework AppKit -framework WebKit -F "$SPARKLE" -framework Sparkle \

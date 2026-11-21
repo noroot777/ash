@@ -34,7 +34,7 @@ extension BrowserWindowController {
     }
     pendingStartingScreen?.cancel()
     let starting = DispatchWorkItem { [weak self] in
-      self?.offlineView.show(title: "正在启动 Navi 服务…", detail: NaviConfig.baseURL.absoluteString, busy: true)
+      self?.offlineView.show(title: "正在启动 Navi", detail: "就绪后自动回到工作区。", busy: true)
     }
     pendingStartingScreen = starting
     if !quietly { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: starting) }

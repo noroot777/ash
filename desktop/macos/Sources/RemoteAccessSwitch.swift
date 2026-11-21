@@ -68,7 +68,7 @@ enum RemoteAccessSwitch {
 
   private static func apply(enable: Bool, verdict: ImpactVerdict, controller: BrowserWindowController?) {
     let note = "正在按新设置重启 Navi 服务…"
-    controller?.showInstalling(note, detail: "接管得了的任务照常在跑，服务起来后自动接上。")
+    controller?.showInstalling("正在重启 Navi", detail: "正在应用访问设置，就绪后自动回到工作区。")
     DispatchQueue.global(qos: .userInitiated).async {
       var failure: String?
       do {
