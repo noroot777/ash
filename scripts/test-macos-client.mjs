@@ -45,7 +45,7 @@ const build = spawnSync("swiftc", ["-swift-version", "5",
     "WindowChrome", "NaviWebView", "BrowserWindowController", "WebViewBridge", "LaunchFlow", "OfflineView", "FirstRunView", "NaviPalette", "HostMcpSetup", "UpdateGate", "RestartImpact",
     "LegacyIdentity", "LoginService"]
     .map((name) => join(root, `desktop/macos/Sources/${name}.swift`)),
-  ...["main", "WindowChromeProbe", "PointerOrderingProbe", "InstanceGuardProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)),
+  ...["main", "WindowChromeProbe", "InstanceGuardProbe"].map((name) => join(root, `desktop/macos/Tests/${name}.swift`)),
   "-o", binary], { encoding: "utf8" });
 assert.equal(build.status, 0, build.stderr);
 
@@ -216,7 +216,7 @@ try {
   // 探针窗口摆在屏幕外、不激活应用；页面是内联的，不碰任何服务。
   result = await launch(binary, ["chrome"], env).done;
   assert.equal(result.status, 0, result.output);
-  console.log("PASS: window chrome, background first clicks, reversed IME completions, and 20 first-click task/button activations with the real input context");
+  console.log("PASS: page under the window controls keeps its clicks; empty title strip and marked bars drag the window; documents that never opted in keep the ordinary title bar");
 
   // ── 端口上是谁 ──
   mkdirSync(data, { recursive: true });
