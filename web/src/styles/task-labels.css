@@ -11,6 +11,7 @@
 
 .task-label-editor > button {
   display: inline-flex;
+  min-width: 0;
   max-width: 100%;
   height: 22px;
   flex: none;
@@ -26,6 +27,12 @@
   transition: background var(--dur-1) var(--ease-out);
 }
 .task-label-editor > button:hover:not(:disabled) { background: var(--sel-bg); }
+/* 文字单独一格、可以收：再长的标签也只在小块里省略，后面的 × 始终留在小块里看得见。 */
+.task-label-editor > button > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .task-label-editor > button > svg {
   width: 12px;
   height: 12px;

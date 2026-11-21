@@ -66,8 +66,11 @@ export function ComposerWorkspace({
     ...remote.branches.map((branch) => ({ value: branch.fullRef, label: branch.ref, mono: true, group: "远端" })),
   ];
   const shownBase = following ? "" : base;
-  // 键上只写名字，括号里那半句说明留在展开的菜单里：底排寸土寸金。
-  const baseLabel = (baseOptions.find((option) => option.value === shownBase)?.label ?? (shownBase || automaticBaseLabel)).replace(/（[^）]*）$/, "");
+  // 「跟随」那一项是自己的文案：键上只写名字，括号里那半句说明留在展开的菜单里（底排寸土寸金）。
+  // 分支名一律原样写 —— `release（稳定）` 是合法分支名，截掉括号会让两条分支显示成同一个名字。
+  const baseLabel = shownBase
+    ? baseOptions.find((option) => option.value === shownBase)?.label ?? shownBase
+    : (following ? FOLLOW_PREREQUISITES : automaticBaseLabel).replace(/（[^）]*）$/, "");
   const remoteBase = following || branches.includes(base) ? null : remote.branches.find((branch) => branch.fullRef === base) ?? null;
   const mergeInto = following ? followPrerequisites.mergeTarget ?? automaticBaseLabel
     : remoteBase ? branches.includes(remoteBase.branch) ? remoteBase.branch : `${remoteBase.branch}（新建，跟踪 ${remoteBase.ref}）`

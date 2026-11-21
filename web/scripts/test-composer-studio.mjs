@@ -23,7 +23,7 @@ try {
     if (path === "/api/llm-providers") data = [{ id: "provider-cpa", name: "CPA 中转", protocol: "anthropic", baseUrl: "https://example.invalid", model: "claude-opus-4.6", protocolConversionEnabled: false, modelListMode: "pinned", pinnedModels: ["claude-opus-4.6"], context1mModels: [], hasKey: true, createdAt: "2026-09-07T00:00:00.000Z" }];
     if (path === "/api/settings") data = { defaultWorkflowId: null };
     if (path === "/api/team-presets") teamPresetRequests += 1;
-    if (path.endsWith("/branches")) data = { branches: ["main", "develop"], current: "main" };
+    if (path.endsWith("/branches")) data = { branches: ["main", "develop", "release（稳定）"], current: "main" };
     // 「设为本项目默认」写的是项目行本身，不是一份全局设置。
     if (path === "/api/projects/p1" && request.method() === "PATCH") {
       const patch = request.postDataJSON();
@@ -84,6 +84,9 @@ try {
   await worktreeSwitch.click();
   assert.equal(await worktreeSwitch.getAttribute("aria-checked"), "true");
   await baseButton.click();
+  await page.getByRole("option", { name: "release（稳定）", exact: true }).click();
+  assert.match(await baseButton.innerText(), /release（稳定）/, "分支名原样写，括号不能当成说明截掉");
+  await baseButton.click();
   await page.getByRole("option", { name: "develop", exact: true }).click();
   assert.match(await baseButton.innerText(), /develop/);
   assert.equal(await page.locator(".studio-popover:visible").count(), 0, "选分支不该再经过浮层");
@@ -121,6 +124,21 @@ try {
   const adder = await page.getByRole("textbox", { name: "添加标签" }).boundingBox();
   assert(Math.abs(chip.y + chip.height / 2 - (adder.y + adder.height / 2)) < 2 && adder.x > chip.x + chip.width,
     "标签小块和添加输入应排在同一行");
+  // 再长的标签也收在小块里：文字省略，× 留在小块和编辑框里面。
+  const LONG = "这是一个比较长但完全正常的中文任务标签用来检查自动换行";
+  await page.getByRole("textbox", { name: "添加标签" }).fill(LONG);
+  await page.getByRole("textbox", { name: "添加标签" }).press("Enter");
+  const longChip = page.getByRole("button", { name: `移除标签 ${LONG}` });
+  const fits = await longChip.evaluate((chip) => {
+    const editor = chip.parentElement.getBoundingClientRect();
+    const box = chip.getBoundingClientRect();
+    const icon = chip.querySelector("svg").getBoundingClientRect();
+    return chip.parentElement.scrollWidth <= chip.parentElement.clientWidth && box.right <= editor.right
+      && icon.left >= box.left && icon.right <= box.right;
+  });
+  assert.equal(fits, true, "长标签的文字和 × 都不能越出小块与编辑框");
+  await longChip.click();
+  assert.equal(await longChip.count(), 0);
   await clickOutside();
   assert.equal(await page.locator(".studio-popover:visible").count(), 0);
   assert.match(await page.getByRole("button", { name: /^组织与标签：/ }).innerText(), /1 个标签/);
