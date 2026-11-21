@@ -2,7 +2,6 @@
 //   ① 抽屉收着也看得见开着的那几个终端,且它们就摆在「终端」按钮右边;
 //   ② 只是看一眼 ≠ 开一个 —— 没展开过抽屉就绝不新建 shell 会话;
 //   ③ 点一个 tab 就展开到它,展开后顶部、底部两份 tab 都能切换同一批终端;
-//   ④ 「终端」后面写着快捷键 G Z;
 //   ⑤ shell 的 ✕ 结束会话(DELETE),命令日志的 ✕ 只是收起;
 //   ⑥ 切项目:上一个项目的 tab 立刻消失,新项目最多为自己建**一个** shell(第 1 轮逻辑审查
 //      实锤过:旧 tab 被当成「新项目要建 shell」,切一次建了两个);
@@ -72,12 +71,24 @@ try {
   // ② 只是看一眼,不该平白起一个 shell。
   assert.deepEqual(await calls(), [], "没展开过抽屉就不该新建会话");
 
-  // ④ 快捷键提示写在按钮上,不只藏在 aria-label 里。
-  assert.match(await terminalButton.innerText(), /终端\s*G Z/, "「终端」后面应当写着快捷键");
+  assert.equal(await terminalButton.innerText(), "", "抽屉开关只保留图标，不应伪装成第三个会话标签");
+  assert.equal(await terminalButton.locator("svg").count(), 1);
+  assert.ok(buttonBox.width <= 28, "开关应为紧凑图标按钮");
+  assert.ok(stripBox.x - (buttonBox.x + buttonBox.width) >= 10, "开关与会话列表之间应留出分隔空间");
+  assert.equal(await terminalButton.getAttribute("aria-pressed"), "false");
+  assert.equal(await terminalButton.getAttribute("aria-keyshortcuts"), "g z");
+  assert.equal(await bar.locator(".status-bar__terminal-control").evaluate((node) => getComputedStyle(node).borderRightWidth), "1px");
+  await terminalButton.hover();
+  await page.getByRole("tooltip", { name: "终端（G Z）" }).waitFor();
+  await page.mouse.move(0, 0);
+  await terminalButton.focus();
+  await page.getByRole("tooltip", { name: "终端（G Z）" }).waitFor();
 
   // ③ 点底部 tab = 展开到它；抽屉顶栏同步显示同一批 tab。
   await tabs.filter({ hasText: "网页前端" }).locator(".status-bar__tab-open").click();
   await page.locator(".project-terminal").waitFor();
+  assert.equal(await terminalButton.getAttribute("aria-pressed"), "true");
+  assert.equal(await terminalButton.evaluate((node) => getComputedStyle(node).backgroundColor), "rgba(0, 0, 0, 0)", "展开状态不应出现会话标签的选中背景");
   const panelTabs = page.locator(".project-terminal__tabs .status-bar__tab");
   assert.equal(await panelTabs.count(), 2, "抽屉顶栏应镜像显示开着的终端");
   assert.equal(await tabs.filter({ hasText: "网页前端" }).evaluate((node) => node.classList.contains("is-active")), true);

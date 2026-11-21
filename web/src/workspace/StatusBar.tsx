@@ -1,5 +1,6 @@
 import { TerminalWindow } from "@phosphor-icons/react";
 import type { ProjectView } from "@navi/shared";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { TERMINAL_SHORTCUT_LABEL } from "./goChord.ts";
 import { TerminalTabStrip } from "./TerminalTabStrip.tsx";
@@ -31,6 +32,8 @@ export function StatusBar({
   terminal: TerminalDock;
 }) {
   const showTerminal = canUseTerminal && !!currentProject;
+  const terminalTip = useHoverTip({ placement: "above" });
+  const terminalLabel = `终端（${TERMINAL_SHORTCUT_LABEL}）`;
   return (
     <footer className="status-bar" aria-label="全局状态栏">
       <div className="status-bar__context">
@@ -45,19 +48,20 @@ export function StatusBar({
 
       {showTerminal && (
         <>
-          <button
-            type="button"
-            className={`status-bar__item${terminal.open ? " is-active" : ""}`}
-            aria-pressed={terminal.open}
-            aria-keyshortcuts="g z"
-            aria-label={`终端（${TERMINAL_SHORTCUT_LABEL}）`}
-            onClick={terminal.toggle}
-          >
-            <TerminalWindow size={13} aria-hidden="true" />
-            终端
-            {/* 快捷键提示:aria-label 里已经念过一遍,这里纯给眼睛看。 */}
-            <kbd className="status-bar__kbd" aria-hidden="true">{TERMINAL_SHORTCUT_LABEL}</kbd>
-          </button>
+          <div className="status-bar__terminal-control">
+            <button
+              {...terminalTip.anchorProps}
+              type="button"
+              className="status-bar__terminal-toggle"
+              aria-pressed={terminal.open}
+              aria-keyshortcuts="g z"
+              aria-label={terminalLabel}
+              onClick={terminal.toggle}
+            >
+              <TerminalWindow size={15} aria-hidden="true" />
+            </button>
+            <HoverTip at={terminalTip.at}>{terminalLabel}</HoverTip>
+          </div>
 
           <TerminalTabStrip ariaLabel="状态栏中的终端" dock={terminal} idPrefix="status-terminal-tab" />
         </>

@@ -44,33 +44,29 @@
   max-width: 180px;
 }
 
-.status-bar__item {
+.status-bar__terminal-control {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 9px;
+  padding: 0 7px;
+  margin-right: 5px;
+  border-right: 1px solid #454756;
+}
+
+.status-bar__terminal-toggle {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 22px;
+  padding: 0;
   border: none;
-  border-radius: 0;
+  border-radius: 4px;
   background: transparent;
-  color: inherit;
-  font-size: 11.5px;
+  color: #8b8d9b;
   cursor: pointer;
 }
-.status-bar__item:hover { background: #3d3f4b; }
-.status-bar__item.is-active { background: #454756; color: #ecedf2; }
-
-/* 快捷键提示:比正文淡一档、字号再小一点,提示是提示,别跟「终端」两个字抢。 */
-.status-bar__kbd {
-  border-radius: 3px;
-  background: #3d3f4b;
-  padding: 0 4px;
-  color: #9092a0;
-  font-family: inherit;
-  font-size: 9.5px;
-  letter-spacing: .04em;
-}
-.status-bar__item.is-active .status-bar__kbd { background: #54566a; color: #c3c5d1; }
+.status-bar__terminal-toggle:hover { background: #3d3f4b; color: #ecedf2; }
+.status-bar__terminal-toggle[aria-pressed="true"] { color: #ecedf2; }
 
 /* 开着的终端:抽屉收起时也摆在这儿,点一下展开到那一个(账本见 workspace/useTerminalDock.ts)。 */
 .status-bar__tabs {
@@ -152,7 +148,7 @@
 .status-bar__tab-add:hover { background: #55586a; color: #ecedf2; }
 .status-bar__tab-add { width: 20px; height: 20px; flex-basis: 20px; margin-left: 2px; color: #8b8d9b; }
 
-.status-bar__item:focus-visible,
+.status-bar__terminal-toggle:focus-visible,
 .status-bar__tab-open:focus-visible,
 .status-bar__tab-close:focus-visible,
 .status-bar__tab-add:focus-visible { outline: 2px solid color-mix(in oklab, var(--accent) 78%, white); outline-offset: -2px; }
