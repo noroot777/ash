@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>任务列表 · 安静一点</title>
+  <title>任务列表 · 三种常驻验收状态</title>
   <style>
     * { box-sizing: border-box; }
     :root {
@@ -11,7 +11,7 @@
       --page: #fafafa; --panel: #f1f1f3; --surface: #fff;
       --ink: #272a30; --text: #515660; --muted: #686e79;
       --line: #e2e3e7; --hover: #e8e8ed; --selected: #e1e2e9;
-      --accent: #686fcb; --red: #b65e64; --amber: #997128;
+      --accent: #686fcb; --red: #b65e64; --amber: #997128; --pending: #e5e7ee;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--page); color: var(--ink);
     }
@@ -20,13 +20,13 @@
       --page: #191a1e; --panel: #222328; --surface: #282930;
       --ink: #ececf1; --text: #c2c4ce; --muted: #a2a5b1;
       --line: #373941; --hover: #2d2f37; --selected: #393c49;
-      --accent: #a1a7f5; --red: #e4979b; --amber: #d5b477;
+      --accent: #a1a7f5; --red: #e4979b; --amber: #d5b477; --pending: #2e323e;
     }
     body { margin: 0; padding: 44px 28px 28px; }
     button { font: inherit; color: inherit; cursor: pointer; }
     button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
     button:disabled { cursor: default; opacity: .55; }
-    main { max-width: 1080px; margin: auto; }
+    main { max-width: 1200px; margin: auto; }
     .eyebrow { font-size: 11px; color: var(--muted); letter-spacing: 1.8px; }
     h1 { margin: 12px 0; font-size: 30px; font-weight: 600; letter-spacing: -1px; }
     .intro { margin: 0; font-size: 13px; line-height: 1.8; color: var(--muted); }
@@ -40,9 +40,9 @@
     .segmented button { border: 0; border-radius: 5px; padding: 5px 10px; background: none; font-size: 12px; color: var(--muted); }
     .segmented button[aria-pressed="true"] { background: var(--selected); color: var(--ink); }
     .toolbar-spacer { flex: 1; }
-    .comparison { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; }
-    .comparison.single { grid-template-columns: minmax(0, 560px); justify-content: center; }
-    .caption { min-height: 83px; }
+    .comparison { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+    .comparison.single { grid-template-columns: minmax(0, 380px); justify-content: center; }
+    .caption { min-height: 110px; }
     .caption h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
     .caption h2 span { margin-right: 9px; color: var(--muted); font-size: 11px; font-weight: 400; }
     .caption p { max-width: 430px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.8; }
@@ -54,23 +54,33 @@
     .filters button { padding: 0; border: 0; background: none; color: var(--muted); font-size: 11px; }
     .filters button[aria-pressed="true"] { color: var(--ink); text-decoration: underline; text-underline-offset: 5px; }
     .list { height: 444px; overflow: auto; padding: 0 7px 12px; scrollbar-width: thin; }
-    .row { display: flex; align-items: center; gap: 7px; width: 100%; height: 35px; padding: 0 10px; border: 0; border-radius: 6px; background: none; text-align: left; }
-    .row:hover { background: var(--hover); }
-    .row.selected { background: var(--selected); }
+    .row-wrap { display: flex; align-items: center; border-radius: 6px; height: 35px; }
+    .mode-d .row-wrap.unaccepted { background: var(--pending); }
+    .row-wrap:hover { background: var(--hover); }
+    .row-wrap.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--accent); }
+    .mode-d .row-wrap.unaccepted:hover { background: color-mix(in srgb, var(--pending) 80%, var(--accent)); }
+    .mode-d .row-wrap.unaccepted.selected { background: var(--pending); }
+    .row { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; height: 35px; padding: 0 10px; border: 0; border-radius: 6px; background: none; text-align: left; }
     .leading { display: grid; place-items: center; flex: 0 0 14px; }
     .task-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; font-weight: 400; }
-    .mode-b .unaccepted .task-title { color: var(--ink); font-weight: 550; }
-    .mode-b .accepted .task-title { color: var(--muted); font-weight: 400; }
+    .accepted-check { display: grid; place-items: center; flex: 0 0 14px; height: 14px; color: var(--muted); font-size: 14px; }
+    .acceptance-box { display: grid; place-items: center; width: 28px; height: 28px; margin-left: 5px; padding: 0; flex: 0 0 28px; border: 0; border-radius: 5px; background: none; color: var(--muted); }
+    button.acceptance-box:hover { background: var(--selected); }
+    .box-shape { display: grid; place-items: center; width: 12px; height: 12px; border: 1px solid var(--muted); border-radius: 3px; font-size: 11px; line-height: 1; }
+    .mode-e .row-wrap.done .row { padding-left: 0; }
+    .mode-e .row-wrap.done .row .leading { display: none; }
     .new-result { width: 4px; height: 4px; flex: 0 0 4px; margin-right: 5px; border-radius: 50%; background: var(--accent); }
     .signal { width: 6px; height: 6px; border-radius: 50%; }
     .running .signal { background: var(--accent); }
     .failed .signal { background: var(--red); }
     .question .signal { background: var(--amber); }
     .status { flex-shrink: 0; color: var(--muted); font-size: 10px; }
-    .detail { min-height: 122px; padding: 15px 17px; border-top: 1px solid var(--line); background: var(--surface); }
+    .detail { min-height: 160px; padding: 15px 17px; border-top: 1px solid var(--line); background: var(--surface); }
     .detail-title { margin: 0 0 7px; font-size: 12px; font-weight: 500; }
     .detail-status { font-size: 11px; line-height: 1.6; color: var(--muted); }
     .detail .control { margin-top: 10px; padding: 5px 9px; font-size: 11px; }
+    .confirm-copy { margin: 9px 0 0; font-size: 11px; line-height: 1.6; color: var(--text); }
+    .confirm-actions { display: flex; gap: 7px; }
     .legend { display: flex; align-items: center; gap: 7px; padding: 12px 0; color: var(--muted); font-size: 11px; }
     .legend .new-result { margin: 0; }
     .notes { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 14px; padding-top: 19px; border-top: 1px solid var(--line); }
@@ -78,55 +88,65 @@
     .notes strong { display: block; margin-bottom: 3px; color: var(--text); font-weight: 500; }
     .feedback { min-height: 22px; margin: 16px 0 0; font-size: 12px; color: var(--text); }
     [hidden] { display: none !important; }
-    @media (max-width: 760px) {
+    @media (max-width: 960px) {
       body { padding: 26px 16px; }
       h1 { font-size: 26px; }
       .comparison, .notes { grid-template-columns: minmax(0, 1fr); }
-      .caption { min-height: 77px; }
+      .caption { min-height: 88px; }
       .toolbar-spacer { display: none; }
-      .comparison { gap: 24px; }
+      .comparison { gap: 24px; max-width: 480px; margin: auto; }
       .notes { gap: 12px; }
     }
   </style>
 </head>
 <body>
   <main>
-    <div class="eyebrow">NAVI / 交互方案对照</div>
-    <h1>任务多，不代表提醒也要多。</h1>
-    <p class="intro">两版用同一批任务。试着点开新完成的任务，再看看：还需要一个常驻的验收标记吗？</p>
+    <div class="eyebrow">NAVI / 第二轮交互方案对照</div>
+    <h1>看过归看过，验收归验收。</h1>
+    <p class="intro">三种常驻表达，同一批任务。点开只表示看过，验收状态不会跟着消失；标题的字重和颜色始终一致。</p>
     <div class="toolbar">
       <div class="segmented" aria-label="对照布局">
-        <button type="button" data-layout="both" aria-pressed="true">并排对比</button>
-        <button type="button" data-layout="a" aria-pressed="false">只看 A</button>
-        <button type="button" data-layout="b" aria-pressed="false">只看 B</button>
+        <button type="button" data-layout="both" aria-pressed="true">三版对比</button>
+        <button type="button" data-layout="c" aria-pressed="false">只看 1</button>
+        <button type="button" data-layout="d" aria-pressed="false">只看 2</button>
+        <button type="button" data-layout="e" aria-pressed="false">只看 3</button>
       </div>
       <span class="toolbar-spacer"></span>
       <button class="control" type="button" id="density" aria-pressed="false">大量积压</button>
       <button class="control" type="button" id="complete">模拟新完成</button>
+      <button class="control" type="button" id="return">过会儿再回来</button>
       <button class="control" type="button" id="theme" aria-pressed="false">深色</button>
       <button class="control" type="button" id="reset">重置</button>
     </div>
     <div class="comparison" id="comparison">
-      <section id="section-a" aria-labelledby="heading-a">
+      <section id="section-c" aria-labelledby="heading-c">
         <header class="caption">
-          <h2 id="heading-a"><span>方案 A</span>看过，就安静下来</h2>
-          <p>新结果出现一个轻提示；点开就消失。已经看过的任务，不再常驻显示验收状态。</p>
+          <h2 id="heading-c"><span>01</span>只给已验收一个勾</h2>
+          <p>完成任务里，没勾就是未验收。只有真正验收后，行尾才出现一个灰色小勾。</p>
         </header>
-        <div class="sidebar mode-a" id="panel-a"></div>
-        <div class="legend"><span class="new-result" aria-hidden="true"></span>只表示有新结果，不表示未验收</div>
+        <div class="sidebar mode-c" id="panel-c"></div>
+        <div class="legend">无勾 = 待验收 · 灰勾 = 已验收</div>
       </section>
-      <section id="section-b" aria-labelledby="heading-b">
+      <section id="section-d" aria-labelledby="heading-d">
         <header class="caption">
-          <h2 id="heading-b"><span>方案 B</span>不加标记，保留区别</h2>
-          <p>新提示同样点开即消失。未验收标题较深、略重；已验收标题更淡，不多画任何符号。</p>
+          <h2 id="heading-d"><span>02</span>用一层浅底色区分</h2>
+          <p>未验收的完成任务保留浅底色，验收后恢复普通背景。选中另用细边框表达。</p>
         </header>
-        <div class="sidebar mode-b" id="panel-b"></div>
-        <div class="legend">看过后仍能通过文字层级辨认，精确状态在下方详情查看</div>
+        <div class="sidebar mode-d" id="panel-d"></div>
+        <div class="legend">浅底色 = 待验收 · 普通背景 = 已验收</div>
+      </section>
+      <section id="section-e" aria-labelledby="heading-e">
+        <header class="caption">
+          <h2 id="heading-e"><span>03</span>明确的验收框</h2>
+          <p>空框表示还没验收，打勾表示已验收。点空框进入模拟确认，点标题只查看任务。</p>
+        </header>
+        <div class="sidebar mode-e" id="panel-e"></div>
+        <div class="legend">空框 = 待验收 · 勾选框 = 已验收</div>
       </section>
     </div>
     <div class="notes">
-      <p><strong>先试“看过”</strong>点开「排查 GitHub 登录回调」。两边的新提示同时消失，但 B 的标题仍保持原来的层级。</p>
-      <p><strong>再试“验收”</strong>点下方的「模拟验收通过」。A 只更新状态；B 的标题进一步变淡。两版都不会把看过当作验收。</p>
+      <p><strong>先试“过会儿再回来”</strong>清掉新结果提示和选中状态，再检查：哪几条还没验收？三版的常驻表达都会留下。</p>
+      <p><strong>再试“验收”</strong>在详情中模拟验收，或点方案 3 的空框。确认后，三版分别出现灰勾、清除底色、勾上验收框。</p>
     </div>
     <p class="feedback" id="feedback" role="status">本页仅使用模拟数据，不会读取或修改真实任务。</p>
   </main>
@@ -141,12 +161,14 @@
       "优化图片加载占位", "整理项目设置入口", "修复消息列表定位",
       "整理通知设置", "优化窗口恢复行为", "更新发布说明"
     ];
-    const panels = ["a", "b"];
+    const panels = ["c", "d", "e"];
+    const panelNames = { c: "1", d: "2", e: "3" };
     let tasks = [];
     let selectedId = null;
     let dense = false;
     let filter = "all";
     let completionCount = 0;
+    let confirmationId = null;
 
     function element(tag, className, text) {
       const node = document.createElement(tag);
@@ -173,6 +195,7 @@
       selectedId = null;
       filter = "all";
       completionCount = 0;
+      confirmationId = null;
       render();
     }
 
@@ -191,13 +214,116 @@
       return task.accepted ? "已验收" : "已完成，待验收";
     }
 
+    function selectTask(task) {
+      selectedId = task.id;
+      confirmationId = null;
+      task.unread = false;
+      render();
+      announce(`已看过「${task.title}」；${stateLabel(task)}。常驻验收状态没有改变。`);
+    }
+
+    function requestAcceptance(task, mode) {
+      selectedId = task.id;
+      task.unread = false;
+      confirmationId = task.id;
+      render();
+      document.querySelector(`#panel-${mode} [data-action="confirm"]`)?.focus({ preventScroll: true });
+      announce(`准备模拟验收「${task.title}」，确认前仍是未验收。`);
+    }
+
+    function renderRow(task, mode) {
+      const stateClass = task.state === "done" ? task.accepted ? "accepted" : "unaccepted" : task.state;
+      const wrapper = element("div", `row-wrap ${task.state} ${stateClass}${selectedId === task.id ? " selected" : ""}`);
+      const row = element("button", "row");
+      row.dataset.taskId = task.id;
+      row.setAttribute("aria-label", `${task.title}，${stateLabel(task)}${task.unread ? "，有新结果" : ""}`);
+      row.setAttribute("aria-pressed", String(selectedId === task.id));
+      const leading = element("span", "leading");
+      leading.setAttribute("aria-hidden", "true");
+      if (task.state !== "done") leading.append(element("span", "signal"));
+      row.append(leading, element("span", "task-title", task.title));
+      if (task.state !== "done") row.append(element("span", "status", stateLabel(task)));
+      if (task.unread) {
+        const mark = element("span", "new-result");
+        mark.setAttribute("aria-hidden", "true");
+        row.append(mark);
+      }
+      if (mode === "c" && task.accepted) {
+        const check = element("span", "accepted-check", "✓");
+        check.setAttribute("aria-hidden", "true");
+        row.append(check);
+      }
+      if (mode === "e" && task.state === "done") {
+        const box = element(task.accepted ? "span" : "button", "acceptance-box");
+        const shape = element("span", "box-shape", task.accepted ? "✓" : "");
+        shape.setAttribute("aria-hidden", "true");
+        box.append(shape);
+        box.setAttribute("aria-label", task.accepted ? `已验收：${task.title}` : `验收：${task.title}`);
+        if (task.accepted) box.setAttribute("role", "img");
+        else {
+          box.dataset.acceptTaskId = task.id;
+          box.onclick = () => requestAcceptance(task, mode);
+        }
+        wrapper.append(box);
+      }
+      row.onclick = () => selectTask(task);
+      wrapper.append(row);
+      return wrapper;
+    }
+
+    function renderDetail(mode) {
+      const detail = element("div", "detail");
+      const selected = tasks.find(task => task.id === selectedId);
+      detail.append(element("h3", "detail-title", selected ? selected.title : "点开任务，只查看、不验收"));
+      detail.append(element("div", "detail-status", selected
+        ? `${stateLabel(selected)}${selected.state === "done" ? " · 已看过" : ""}`
+        : "验收状态常驻。右侧小点仅表示新结果，看过即消失。"));
+      if (!selected || !pending(selected)) return detail;
+      if (confirmationId !== selected.id) {
+        const accept = element("button", "control", "模拟验收");
+        accept.dataset.action = "accept";
+        accept.onclick = () => requestAcceptance(selected, mode);
+        detail.append(accept);
+        return detail;
+      }
+      const confirmation = element("div", "");
+      confirmation.setAttribute("role", "group");
+      confirmation.setAttribute("aria-label", "模拟验收确认");
+      confirmation.append(element("p", "confirm-copy", "确认模拟验收？仅改变本页演示数据。"));
+      const actions = element("div", "confirm-actions");
+      const confirm = element("button", "control", "确认模拟验收");
+      confirm.dataset.action = "confirm";
+      confirm.onclick = () => {
+        selected.accepted = true;
+        selected.unread = false;
+        confirmationId = null;
+        render();
+        const focusTarget = document.querySelector(`#panel-${mode} [data-task-id="${selected.id}"]`)
+          || document.querySelector(`#panel-${mode} [data-filter="${filter}"]`);
+        focusTarget?.focus({ preventScroll: true });
+        announce(`「${selected.title}」已模拟验收：方案 1 出现灰勾，方案 2 清除底色，方案 3 勾上验收框。`);
+      };
+      const cancel = element("button", "control", "取消");
+      cancel.dataset.action = "cancel";
+      cancel.onclick = () => {
+        confirmationId = null;
+        render();
+        document.querySelector(`#panel-${mode} [data-action="accept"]`)?.focus({ preventScroll: true });
+        announce("已取消模拟验收，任务仍然未验收。它的常驻表达保持不变。");
+      };
+      actions.append(confirm, cancel);
+      confirmation.append(actions);
+      detail.append(confirmation);
+      return detail;
+    }
+
     function renderPanel(mode) {
       const panel = document.getElementById(`panel-${mode}`);
       const base = baseTasks();
       const project = element("div", "project");
       project.append(element("span", "project-icon", "N"), element("span", "", "Navi"), element("small", "", "项目任务"));
       const filters = element("div", "filters");
-      filters.setAttribute("aria-label", `方案 ${mode.toUpperCase()} 任务筛选`);
+      filters.setAttribute("aria-label", `方案 ${panelNames[mode]} 任务筛选`);
       const filtersData = [
         ["all", "全部"],
         ["pending", `待验收 ${base.filter(pending).length}`],
@@ -207,56 +333,15 @@
         const button = element("button", "", label);
         button.dataset.filter = key;
         button.setAttribute("aria-pressed", String(filter === key));
-        button.onclick = () => { filter = key; render(); };
+        button.onclick = () => { filter = key; confirmationId = null; render(); };
         filters.append(button);
       }
       const list = element("div", "list");
-      list.setAttribute("aria-label", `方案 ${mode.toUpperCase()} 任务列表`);
+      list.setAttribute("aria-label", `方案 ${panelNames[mode]} 任务列表`);
       const visible = base.filter(task => filter === "all" || (filter === "pending" ? pending(task) : task.accepted));
-      for (const task of visible) {
-        const stateClass = task.state === "done" ? task.accepted ? "accepted" : "unaccepted" : task.state;
-        const row = element("button", `row ${stateClass}${selectedId === task.id ? " selected" : ""}`);
-        row.dataset.taskId = task.id;
-        row.setAttribute("aria-label", `${task.title}，${stateLabel(task)}${task.unread ? "，有新结果" : ""}`);
-        row.setAttribute("aria-pressed", String(selectedId === task.id));
-        const leading = element("span", "leading");
-        leading.setAttribute("aria-hidden", "true");
-        if (task.state !== "done") leading.append(element("span", "signal"));
-        row.append(leading, element("span", "task-title", task.title));
-        if (task.state !== "done") row.append(element("span", "status", stateLabel(task)));
-        else if (task.unread) {
-          const mark = element("span", "new-result");
-          mark.setAttribute("aria-hidden", "true");
-          row.append(mark);
-        }
-        row.onclick = () => {
-          selectedId = task.id;
-          task.unread = false;
-          render();
-          announce(`已看过「${task.title}」；${stateLabel(task)}。`);
-        };
-        list.append(row);
-      }
+      for (const task of visible) list.append(renderRow(task, mode));
       if (!visible.length) list.append(element("p", "intro", "此筛选下没有任务。"));
-      const detail = element("div", "detail");
-      const selected = tasks.find(task => task.id === selectedId);
-      detail.append(element("h3", "detail-title", selected ? selected.title : "点开一条任务，看看提示如何变化"));
-      detail.append(element("div", "detail-status", selected
-        ? `${stateLabel(selected)}${selected.state === "done" ? " · 已看过" : ""}`
-        : "看过只消除新结果提示，不会自动验收。"));
-      if (selected && pending(selected)) {
-        const accept = element("button", "control", "模拟验收通过");
-        accept.dataset.action = "accept";
-        accept.onclick = () => {
-          selected.accepted = true;
-          selected.unread = false;
-          render();
-          document.querySelector(`#panel-${mode} [data-task-id="${selected.id}"]`)?.focus({ preventScroll: true });
-          announce(`「${selected.title}」已模拟验收。A 的标题不变，B 的标题变淡。`);
-        };
-        detail.append(accept);
-      }
-      panel.replaceChildren(project, filters, list, detail);
+      panel.replaceChildren(project, filters, list, renderDetail(mode));
     }
 
     function render() {
@@ -264,11 +349,13 @@
       const activePanel = active?.closest(".sidebar")?.id;
       const activeTask = active?.dataset.taskId;
       const activeFilter = active?.dataset.filter;
+      const activeAction = active?.dataset.action;
       const positions = panels.map(mode => document.querySelector(`#panel-${mode} .list`)?.scrollTop || 0);
       panels.forEach(renderPanel);
       panels.forEach((mode, index) => { document.querySelector(`#panel-${mode} .list`).scrollTop = positions[index]; });
       if (activePanel && activeTask) document.querySelector(`#${activePanel} [data-task-id="${activeTask}"]`)?.focus({ preventScroll: true });
       if (activePanel && activeFilter) document.querySelector(`#${activePanel} [data-filter="${activeFilter}"]`)?.focus({ preventScroll: true });
+      if (activePanel && activeAction) document.querySelector(`#${activePanel} [data-action="${activeAction}"]`)?.focus({ preventScroll: true });
       document.getElementById("density").setAttribute("aria-pressed", String(dense));
       document.getElementById("density").textContent = dense ? "少量任务" : "大量积压";
     }
@@ -293,9 +380,19 @@
       const task = { id: `new-${completionCount}`, title: `新完成：任务列表优化 ${completionCount}`, state: "done", accepted: false, unread: true };
       tasks.unshift(task);
       filter = "all";
+      confirmationId = null;
       render();
       panels.forEach(mode => { document.querySelector(`#panel-${mode} .list`).scrollTop = 0; });
-      announce("两边都新增了一条完成结果。点开后，新提示消失，但它仍然待验收。");
+      announce("三版都新增了一条完成结果。点开后新提示消失，但常驻验收状态保留。");
+    };
+    document.getElementById("return").onclick = () => {
+      tasks.forEach(task => { task.unread = false; });
+      selectedId = null;
+      confirmationId = null;
+      filter = "all";
+      render();
+      panels.forEach(mode => { document.querySelector(`#panel-${mode} .list`).scrollTop = 0; });
+      announce("模拟过一会儿再回来：新提示与选中状态已清空，所有任务的验收状态保持不变。刷新页面会重置演示数据。");
     };
     document.getElementById("theme").onclick = () => {
       const dark = document.documentElement.classList.toggle("dark");
