@@ -10,7 +10,7 @@ const identity = {
 
 export function registerTaskRuntimeTools(server: McpServer): void {
   server.registerTool("start_dev_service", {
-    description: "在当前任务工作区启动托管 Web 服务，用于开发验证和完成后的用户预览。健康检查通过才返回就绪；同命令复用。服务独立于智能体进程，完成后保持运行，任务页面可打开、看日志、停止。使用 $PORT 等动态端口，避免 shell 后台进程随会话退出。",
+    description: "在当前任务工作区启动托管 Web 服务，用于开发验证和完成后的用户预览。健康检查通过才返回就绪；已有用户预览优先复用，返回其实际命令和地址，不停止或替换；开发服务同命令复用。服务独立于智能体进程，完成后保持运行，任务页面可打开、看日志、停止。使用 $PORT 等动态端口，避免 shell 后台进程随会话退出。",
     inputSchema: { ...identity, command: z.string().min(1), name: z.string().max(80).optional() },
   }, async ({ taskId, directionToken, ...body }) => {
     try { return ok(await call("POST", `/tasks/${encodeURIComponent(taskId)}/runtime/service`, body, directionToken)); }

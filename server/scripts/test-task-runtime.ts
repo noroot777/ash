@@ -404,9 +404,16 @@ try {
     id: "preview", kind: "preview", p: { cmd: "node service.cjs", mode: "command", life: "task", ready: "port" }, fail: null,
   }, workspace);
   assert.equal(ordinary.ok, true);
-  await assert.rejects(() => startDevelopmentService("runtime", { command: "node ./service.cjs" }, async () => {}), /已有另一项预览服务/);
   if (!ordinary.ok) throw new Error(ordinary.reason);
   const ordinaryRecord = ordinary.record;
+  for (const command of ["node service.cjs", "node ./service.cjs"]) {
+    const reusedOrdinary = await okJson(await request("runtime/service", "POST", { command }, agentHeaders));
+    assert.equal(reusedOrdinary.reused, true);
+    assert.equal(reusedOrdinary.service.gen, ordinaryRecord.gen);
+    assert.equal(reusedOrdinary.service.command, ordinaryRecord.cmd);
+    assert.equal(reusedOrdinary.service.url, ordinaryRecord.url);
+    assert.equal(readAnyPreview("runtime")?.purpose, undefined);
+  }
   let ordinaryPage = await action({ action: "open" });
   const ordinaryBrowser = ordinaryPage.state.id;
   ordinaryPage = await action({ action: "fill", id: ordinaryBrowser, ref: ordinaryPage.targets.find(target => target.name === "成员姓名")!.ref, text: "续聊后保留" });
@@ -417,6 +424,9 @@ try {
     for (const previous of ["done", "paused", "failed", "canceled"] as const) {
       await db.update(tasks).set({ status: previous }).where(eq(tasks.id, "runtime"));
       await setTaskStatus("runtime", "running");
+      const continuedOrdinary = await okJson(await request("runtime/service", "POST", { command: "node ./service.cjs" }, agentHeaders));
+      assert.equal(continuedOrdinary.reused, true);
+      assert.equal(continuedOrdinary.service.gen, ordinaryRecord.gen);
       assert.equal(readAnyPreview("runtime")?.gen, ordinaryRecord.gen);
       assert.equal(readAnyPreview("runtime")?.url, ordinaryRecord.url);
       assert.equal(alive(ordinaryRecord.pid), true);
@@ -433,6 +443,7 @@ try {
   const { state: _state, ...legacyRecord } = ordinaryRecord;
   writeFileSync(join(root, "runs", "runtime", "preview.json"), JSON.stringify(legacyRecord));
   await stopPreviewOnRerun("runtime");
+  assert.equal((await startDevelopmentService("runtime", { command: "node ./service.cjs" }, async () => {})).reused, true);
   assert.equal(alive(ordinaryRecord.pid), true);
   assert.equal(readAnyPreview("runtime")?.gen, ordinaryRecord.gen);
   assert.equal((await stopPreviewAtAccept("runtime")).stopped, true);

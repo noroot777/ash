@@ -35,14 +35,15 @@ export async function startDevelopmentService(
   await beforeStart();
   const command = input.command.trim();
   const existing = readAnyPreview(taskId);
-  if (existing?.purpose === "development" && existing.cmd === command && existing.state === "ready" && alive(existing.pid)) {
+  if (existing && (existing.purpose !== "development" || existing.cmd === command) && existing.state !== "starting" && alive(existing.pid)) {
     if (!existing.port || !await canConnect(existing.port)) throw new Error("已有服务进程仍在，但端口健康检查失败，请先停止后重新启动");
     await beforeStart();
-    if (readAnyPreview(taskId)?.gen !== existing.gen) throw new Error("服务已被停止或替换，请重试");
+    const current = readAnyPreview(taskId);
+    if (!current || current.gen !== existing.gen || current.pid !== existing.pid || current.state === "starting") throw new Error("服务已被停止或替换，请重试");
     return { reused: true, service: previewState(taskId) };
   }
   if (isPreviewStarting(taskId)) throw new Error("服务正在启动，请查看状态或停止后重试");
-  if (existing && existing.purpose !== "development") throw new Error("此任务已有另一项预览服务，请先明确停止它再启动新服务");
+  if (existing && existing.purpose !== "development") throw new Error("此任务的预览暂不可用，请查看预览状态和日志");
   const gen = beginPreviewStart(taskId, undefined, "development");
   try {
     const directory = await developmentDirectory(taskId);

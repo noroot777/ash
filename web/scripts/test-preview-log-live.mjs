@@ -92,6 +92,30 @@ try {
   );
   await closing.close();
 
+  for (const status of ["running", "queued"]) {
+    const controls = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+    await trackFetches(controls, "/free-workflow/preview$");
+    await controls.goto(`${base}?mode=ready-close&status=${status}`);
+    const stopRunning = controls.getByRole("button", { name: "关闭预览" });
+    await stopRunning.waitFor();
+    assert.equal(await stopRunning.isEnabled(), true, `${status} 时已打开的预览仍可手动关闭`);
+    if (status === "running" && process.env.PREVIEW_RUNNING_SHOT) await controls.screenshot({ path: process.env.PREVIEW_RUNNING_SHOT });
+    await stopRunning.click();
+    await controls.getByRole("button", { name: "关闭中" }).waitFor();
+    assert.equal(await controls.getByRole("button", { name: "关闭中" }).isDisabled(), true);
+    assert.equal((await fetchLog(controls)).filter(entry => entry.method === "DELETE").length, 1);
+
+    await controls.goto(`${base}?mode=already-starting&status=${status}`);
+    const cancelRunning = controls.getByRole("button", { name: "启动中·点此取消" });
+    await cancelRunning.waitFor();
+    assert.equal(await cancelRunning.isEnabled(), true, `${status} 时仍可取消在途预览`);
+    await cancelRunning.click();
+    const blockedOpen = controls.getByRole("button", { name: "打开预览" });
+    await blockedOpen.waitFor();
+    assert.equal(await blockedOpen.isDisabled(), true, `${status} 时不能新开预览`);
+    await controls.close();
+  }
+
   // ②d 取消赢了，那趟 POST 却随后 200 回来：它绝不能再宣告「预览已打开」、更不能弹开
   //     一个已经被停掉的地址。这条缝在服务端是真实存在的——POST 判定就绪后还要
   //     `await appendTaskTimeline` 才回 200，而 DELETE 故意不抢那把锁。
