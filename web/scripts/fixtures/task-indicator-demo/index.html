@@ -3,172 +3,129 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>任务列表 · 三种常驻验收状态</title>
+  <title>待验收圆点 · 五种样式对照</title>
   <style>
     * { box-sizing: border-box; }
     :root {
       color-scheme: light;
-      --page: #fafafa; --panel: #f1f1f3; --surface: #fff;
-      --ink: #272a30; --text: #515660; --muted: #686e79;
-      --line: #e2e3e7; --hover: #e8e8ed; --selected: #e1e2e9;
-      --accent: #686fcb; --red: #b65e64; --amber: #997128; --pending: #e5e7ee;
+      --page: #fafafa; --surface: #fff; --panel: #f1f1f3;
+      --ink: #292c32; --muted: #69707b; --line: #dfe1e6;
+      --hover: #e8e9ed; --selected: #e1e3eb;
+      --accent: #686fcb; --dot-ink: #858aa8; --queue: #b4b7c1;
+      --red: #b65e64; --amber: #997128;
+      color: var(--ink); background: var(--page);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--page); color: var(--ink);
     }
     :root.dark {
       color-scheme: dark;
-      --page: #191a1e; --panel: #222328; --surface: #282930;
-      --ink: #ececf1; --text: #c2c4ce; --muted: #a2a5b1;
-      --line: #373941; --hover: #2d2f37; --selected: #393c49;
-      --accent: #a1a7f5; --red: #e4979b; --amber: #d5b477; --pending: #2e323e;
+      --page: #191a1e; --surface: #26272d; --panel: #222328;
+      --ink: #e1e3eb; --muted: #a3a7b3; --line: #3b3d46;
+      --hover: #30323c; --selected: #3a3e4c;
+      --accent: #a1a7f5; --dot-ink: #a0a6c5; --queue: #6c7180;
+      --red: #e4979b; --amber: #d5b477;
     }
-    body { margin: 0; padding: 44px 28px 28px; }
-    button { font: inherit; color: inherit; cursor: pointer; }
-    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-    button:disabled { cursor: default; opacity: .55; }
-    main { max-width: 1200px; margin: auto; }
-    .eyebrow { font-size: 11px; color: var(--muted); letter-spacing: 1.8px; }
-    h1 { margin: 12px 0; font-size: 30px; font-weight: 600; letter-spacing: -1px; }
-    .intro { margin: 0; font-size: 13px; line-height: 1.8; color: var(--muted); }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 26px 0; }
-    .control {
-      border: 1px solid var(--line); border-radius: 7px; background: var(--surface);
-      padding: 8px 11px; font-size: 12px; white-space: nowrap;
-    }
-    .control:hover:not(:disabled) { background: var(--hover); }
-    .segmented { display: flex; padding: 3px; border: 1px solid var(--line); border-radius: 8px; }
-    .segmented button { border: 0; border-radius: 5px; padding: 5px 10px; background: none; font-size: 12px; color: var(--muted); }
-    .segmented button[aria-pressed="true"] { background: var(--selected); color: var(--ink); }
+    body { margin: 0; padding: 38px 24px; }
+    main { max-width: 1140px; margin: auto; }
+    button { font: inherit; cursor: pointer; color: inherit; }
+    button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .eyebrow { color: var(--muted); font-size: 11px; letter-spacing: 1.6px; }
+    h1 { margin: 12px 0; font-size: 28px; font-weight: 600; letter-spacing: -.8px; }
+    .intro { margin: 0; font-size: 13px; line-height: 1.9; color: var(--muted); }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 23px 0 12px; }
+    .control { padding: 7px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); font-size: 12px; }
+    .control:hover { background: var(--hover); }
+    .control[aria-pressed="true"] { background: var(--selected); }
     .toolbar-spacer { flex: 1; }
-    .comparison { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
-    .comparison.single { grid-template-columns: minmax(0, 380px); justify-content: center; }
-    .caption { min-height: 110px; }
-    .caption h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
-    .caption h2 span { margin-right: 9px; color: var(--muted); font-size: 11px; font-weight: 400; }
-    .caption p { max-width: 430px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.8; }
-    .sidebar { border: 1px solid var(--line); border-radius: 11px; background: var(--panel); overflow: hidden; }
-    .project { display: flex; align-items: center; gap: 9px; padding: 18px 17px 16px; font-size: 13px; font-weight: 600; }
-    .project-icon { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--selected); font-size: 12px; }
-    .project small { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 400; }
-    .filters { display: flex; gap: 16px; margin: 0 17px 9px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
-    .filters button { padding: 0; border: 0; background: none; color: var(--muted); font-size: 11px; }
-    .filters button[aria-pressed="true"] { color: var(--ink); text-decoration: underline; text-underline-offset: 5px; }
-    .list { height: 444px; overflow: auto; padding: 0 7px 12px; scrollbar-width: thin; }
-    .row-wrap { display: flex; align-items: center; border-radius: 6px; height: 35px; }
-    .mode-d .row-wrap.unaccepted { background: var(--pending); }
-    .row-wrap:hover { background: var(--hover); }
-    .row-wrap.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--accent); }
-    .mode-d .row-wrap.unaccepted:hover { background: color-mix(in srgb, var(--pending) 80%, var(--accent)); }
-    .mode-d .row-wrap.unaccepted.selected { background: var(--pending); }
-    .row { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; height: 35px; padding: 0 10px; border: 0; border-radius: 6px; background: none; text-align: left; }
-    .leading { display: grid; place-items: center; flex: 0 0 14px; }
-    .task-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; font-weight: 400; }
-    .accepted-check { display: grid; place-items: center; flex: 0 0 14px; height: 14px; color: var(--muted); font-size: 14px; }
-    .acceptance-box { display: grid; place-items: center; width: 28px; height: 28px; margin-left: 5px; padding: 0; flex: 0 0 28px; border: 0; border-radius: 5px; background: none; color: var(--muted); }
-    button.acceptance-box:hover { background: var(--selected); }
-    .box-shape { display: grid; place-items: center; width: 12px; height: 12px; border: 1px solid var(--muted); border-radius: 3px; font-size: 11px; line-height: 1; }
-    .mode-e .row-wrap.done .row { padding-left: 0; }
-    .mode-e .row-wrap.done .row .leading { display: none; }
-    .new-result { width: 4px; height: 4px; flex: 0 0 4px; margin-right: 5px; border-radius: 50%; background: var(--accent); }
-    .signal { width: 6px; height: 6px; border-radius: 50%; }
-    .running .signal { background: var(--accent); }
-    .failed .signal { background: var(--red); }
-    .question .signal { background: var(--amber); }
+    .feedback { min-height: 22px; margin: 0 0 17px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+    .gallery.single { grid-template-columns: minmax(0, 360px); justify-content: center; }
+    .card { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    .card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 15px 7px; }
+    .card h2 { margin: 0; font-size: 13px; font-weight: 600; }
+    .number { margin-right: 8px; color: var(--muted); font-size: 10px; font-weight: 400; }
+    .isolate { padding: 4px; border: 0; background: none; color: var(--muted); font-size: 11px; }
+    .isolate:hover { color: var(--ink); text-decoration: underline; }
+    .description { min-height: 34px; margin: 0; padding: 0 15px; color: var(--muted); font-size: 11px; line-height: 1.8; }
+    .specimens { display: flex; gap: 25px; align-items: center; padding: 10px 15px 14px; }
+    .specimen { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 10px; }
+    .sample-stage { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 6px; background: var(--panel); }
+    .zoom .dot { transform: scale(4); }
+    .list { padding: 9px 7px; background: var(--panel); border-top: 1px solid var(--line); }
+    .row { display: flex; align-items: center; gap: 6px; width: 100%; height: 32px; padding: 0 7px; border: 0; border-radius: 6px; background: none; text-align: left; }
+    .row:hover { background: var(--hover); }
+    .row.selected { background: var(--selected); }
+    .leading { display: grid; place-items: center; flex: 0 0 22px; }
+    .task-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 400; }
     .status { flex-shrink: 0; color: var(--muted); font-size: 10px; }
-    .detail { min-height: 160px; padding: 15px 17px; border-top: 1px solid var(--line); background: var(--surface); }
-    .detail-title { margin: 0 0 7px; font-size: 12px; font-weight: 500; }
-    .detail-status { font-size: 11px; line-height: 1.6; color: var(--muted); }
-    .detail .control { margin-top: 10px; padding: 5px 9px; font-size: 11px; }
-    .confirm-copy { margin: 9px 0 0; font-size: 11px; line-height: 1.6; color: var(--text); }
-    .confirm-actions { display: flex; gap: 7px; }
-    .legend { display: flex; align-items: center; gap: 7px; padding: 12px 0; color: var(--muted); font-size: 11px; }
-    .legend .new-result { margin: 0; }
-    .notes { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 14px; padding-top: 19px; border-top: 1px solid var(--line); }
-    .notes p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.9; }
-    .notes strong { display: block; margin-bottom: 3px; color: var(--text); font-weight: 500; }
-    .feedback { min-height: 22px; margin: 16px 0 0; font-size: 12px; color: var(--text); }
+    .dot { display: block; position: relative; width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; flex-shrink: 0; }
+    .style-original .dot {
+      background: color-mix(in oklab, var(--accent) 16%, transparent);
+      box-shadow: inset 0 0 0 1.5px var(--accent);
+    }
+    .style-hairline .dot { width: 6px; height: 6px; border: 1px solid color-mix(in srgb, var(--dot-ink) 85%, transparent); }
+    .style-micro .dot { width: 4px; height: 4px; background: var(--dot-ink); }
+    .style-matte .dot { width: 6px; height: 6px; background: color-mix(in srgb, var(--dot-ink) 55%, transparent); }
+    .style-soft-core .dot { background: color-mix(in srgb, var(--dot-ink) 16%, transparent); }
+    .style-soft-core .dot::after {
+      content: ""; position: absolute; width: 3px; height: 3px; border-radius: 50%;
+      left: 2px; top: 2px; background: var(--dot-ink);
+    }
+    .style-small-ring .dot { width: 5px; height: 5px; border: 1px solid color-mix(in srgb, var(--accent) 75%, transparent); }
+    .signal { display: block; width: 6px; height: 6px; border-radius: 50%; }
+    .signal.running { background: var(--accent); }
+    .signal.failed { background: var(--red); }
+    .signal.question { background: var(--amber); }
+    .signal.queued { background: transparent; box-shadow: inset 0 0 0 1px var(--queue); }
+    .spec { padding: 10px 15px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+    .notes { margin: 20px 0 0; color: var(--muted); font-size: 12px; line-height: 1.9; }
+    .notes a { color: inherit; text-underline-offset: 3px; }
     [hidden] { display: none !important; }
-    @media (max-width: 960px) {
-      body { padding: 26px 16px; }
-      h1 { font-size: 26px; }
-      .comparison, .notes { grid-template-columns: minmax(0, 1fr); }
-      .caption { min-height: 88px; }
+    @media (max-width: 980px) { .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 640px) {
+      body { padding: 25px 15px; }
+      h1 { font-size: 25px; }
+      .gallery { grid-template-columns: minmax(0, 1fr); max-width: 400px; margin: auto; }
       .toolbar-spacer { display: none; }
-      .comparison { gap: 24px; max-width: 480px; margin: auto; }
-      .notes { gap: 12px; }
     }
   </style>
 </head>
 <body>
   <main>
-    <div class="eyebrow">NAVI / 第二轮交互方案对照</div>
-    <h1>看过归看过，验收归验收。</h1>
-    <p class="intro">三种常驻表达，同一批任务。点开只表示看过，验收状态不会跟着消失；标题的字重和颜色始终一致。</p>
+    <div class="eyebrow">NAVI / 只换小圆点</div>
+    <h1>不改含义，只让它轻一点。</h1>
+    <p class="intro">原样 + 五种候选。全部保持在行首、静态常驻，点开任务也不会消失。只有待验收圆点变，标题与其他状态不变。</p>
     <div class="toolbar">
-      <div class="segmented" aria-label="对照布局">
-        <button type="button" data-layout="both" aria-pressed="true">三版对比</button>
-        <button type="button" data-layout="c" aria-pressed="false">只看 1</button>
-        <button type="button" data-layout="d" aria-pressed="false">只看 2</button>
-        <button type="button" data-layout="e" aria-pressed="false">只看 3</button>
-      </div>
+      <button class="control" type="button" id="all">全部对比</button>
+      <button class="control" type="button" id="density" aria-pressed="false">看更密的列表</button>
+      <button class="control" type="button" id="mixed" aria-pressed="false">混合其他状态</button>
+      <button class="control" type="button" id="clear">清除选中</button>
       <span class="toolbar-spacer"></span>
-      <button class="control" type="button" id="density" aria-pressed="false">大量积压</button>
-      <button class="control" type="button" id="complete">模拟新完成</button>
-      <button class="control" type="button" id="return">过会儿再回来</button>
       <button class="control" type="button" id="theme" aria-pressed="false">深色</button>
-      <button class="control" type="button" id="reset">重置</button>
     </div>
-    <div class="comparison" id="comparison">
-      <section id="section-c" aria-labelledby="heading-c">
-        <header class="caption">
-          <h2 id="heading-c"><span>01</span>只给已验收一个勾</h2>
-          <p>完成任务里，没勾就是未验收。只有真正验收后，行尾才出现一个灰色小勾。</p>
-        </header>
-        <div class="sidebar mode-c" id="panel-c"></div>
-        <div class="legend">无勾 = 待验收 · 灰勾 = 已验收</div>
-      </section>
-      <section id="section-d" aria-labelledby="heading-d">
-        <header class="caption">
-          <h2 id="heading-d"><span>02</span>用一层浅底色区分</h2>
-          <p>未验收的完成任务保留浅底色，验收后恢复普通背景。选中另用细边框表达。</p>
-        </header>
-        <div class="sidebar mode-d" id="panel-d"></div>
-        <div class="legend">浅底色 = 待验收 · 普通背景 = 已验收</div>
-      </section>
-      <section id="section-e" aria-labelledby="heading-e">
-        <header class="caption">
-          <h2 id="heading-e"><span>03</span>明确的验收框</h2>
-          <p>空框表示还没验收，打勾表示已验收。点空框进入模拟确认，点标题只查看任务。</p>
-        </header>
-        <div class="sidebar mode-e" id="panel-e"></div>
-        <div class="legend">空框 = 待验收 · 勾选框 = 已验收</div>
-      </section>
-    </div>
-    <div class="notes">
-      <p><strong>先试“过会儿再回来”</strong>清掉新结果提示和选中状态，再检查：哪几条还没验收？三版的常驻表达都会留下。</p>
-      <p><strong>再试“验收”</strong>在详情中模拟验收，或点方案 3 的空框。确认后，三版分别出现灰勾、清除底色、勾上验收框。</p>
-    </div>
-    <p class="feedback" id="feedback" role="status">本页仅使用模拟数据，不会读取或修改真实任务。</p>
+    <p class="feedback" id="feedback" role="status">先看列表里的真实尺寸，再看 4× 放大。可以点击同一行，比较选中背景上的效果。</p>
+    <div class="gallery" id="gallery"></div>
+    <p class="notes">混合状态模式包含运行、等答复、失败、排队和已验收，方便检查是否混淆。微实心更省视觉空间，但也更接近运行实心点。<br>仅为独立样式 demo，不修改正式界面或真实任务。<a href="acceptance-states.html">上一轮状态方案</a></p>
   </main>
   <script>
-    const taskTitles = [
+    const styles = [
+      { key: "original", number: "原样", name: "当前圆环", description: "对照基准：靛蓝色、粗环，内部有浅填色。", spec: "7 px · 1.5 px 环线 · 原有主色" },
+      { key: "hairline", number: "01", name: "细线环", description: "去掉内填色，环线更细，颜色改成低饱和蓝灰。", spec: "6 px · 1 px 环线 · 蓝灰" },
+      { key: "micro", number: "02", name: "微实心", description: "缩成一个针尖大小的实心点，不再有靶心感。", spec: "4 px · 无边框 · 蓝灰" },
+      { key: "matte", number: "03", name: "雾面点", description: "保持圆点的可见面积，拿掉硬边，用浅实心表达。", spec: "6 px · 55% 蓝灰填色 · 无边框" },
+      { key: "soft-core", number: "04", name: "柔芯点", description: "中间一粒小点，外面一圈淡色底，不画硬圆环。", spec: "7 px 浅底 · 3 px 点芯 · 无模糊与发光" },
+      { key: "small-ring", number: "05", name: "迷你空心环", description: "保留熟悉的空心含义，但整体缩小、主色减淡。", spec: "5 px · 1 px 环线 · 75% 原有主色" }
+    ];
+    const titles = [
       "排查 GitHub 登录回调", "调整任务详情的留白", "修复侧栏滚动位置",
       "优化长任务标题截断", "统一设置页按钮尺寸", "整理验收结果提示",
       "修复附件预览层级", "调整项目切换交互", "优化终端连接提示",
-      "补齐空列表占位", "修复任务搜索焦点", "调整消息时间显示",
-      "优化分组展开动画", "修复详情面板宽度", "整理快捷键说明",
-      "优化深色模式边框", "调整任务菜单间距", "修复置顶任务排序",
-      "优化图片加载占位", "整理项目设置入口", "修复消息列表定位",
-      "整理通知设置", "优化窗口恢复行为", "更新发布说明"
+      "补齐空列表占位", "修复任务搜索焦点", "调整消息时间显示"
     ];
-    const panels = ["c", "d", "e"];
-    const panelNames = { c: "1", d: "2", e: "3" };
-    let tasks = [];
-    let selectedId = null;
+    const statusLabels = { pending: "已完成，待验收", running: "运行中", question: "等你答复", failed: "失败", queued: "排队中", accepted: "已验收" };
     let dense = false;
-    let filter = "all";
-    let completionCount = 0;
-    let confirmationId = null;
+    let mixed = false;
+    let selectedId = null;
+    let isolatedStyle = null;
 
     function element(tag, className, text) {
       const node = document.createElement(tag);
@@ -182,229 +139,110 @@
       document.getElementById("feedback").textContent = message;
     }
 
-    function resetTasks() {
-      tasks = [
-        { id: "running", title: "优化任务加载速度", state: "running" },
-        { id: "question", title: "确认发布配置", state: "question" },
-        { id: "failed", title: "修复构建失败", state: "failed" },
-        ...taskTitles.map((title, index) => ({
-          id: `task-${index}`, title, state: "done",
-          accepted: index % 4 === 3, unread: index < 2
-        }))
-      ];
-      selectedId = null;
-      filter = "all";
-      completionCount = 0;
-      confirmationId = null;
-      render();
-    }
-
-    function pending(task) {
-      return task.state === "done" && !task.accepted;
-    }
-
-    function baseTasks() {
-      return dense ? tasks : tasks.filter(task => !task.id.startsWith("task-") || Number(task.id.slice(5)) < 9);
-    }
-
-    function stateLabel(task) {
-      if (task.state === "running") return "运行中";
-      if (task.state === "failed") return "执行失败";
-      if (task.state === "question") return "等你答复";
-      return task.accepted ? "已验收" : "已完成，待验收";
-    }
-
-    function selectTask(task) {
-      selectedId = task.id;
-      confirmationId = null;
-      task.unread = false;
-      render();
-      announce(`已看过「${task.title}」；${stateLabel(task)}。常驻验收状态没有改变。`);
-    }
-
-    function requestAcceptance(task, mode) {
-      selectedId = task.id;
-      task.unread = false;
-      confirmationId = task.id;
-      render();
-      document.querySelector(`#panel-${mode} [data-action="confirm"]`)?.focus({ preventScroll: true });
-      announce(`准备模拟验收「${task.title}」，确认前仍是未验收。`);
-    }
-
-    function renderRow(task, mode) {
-      const stateClass = task.state === "done" ? task.accepted ? "accepted" : "unaccepted" : task.state;
-      const wrapper = element("div", `row-wrap ${task.state} ${stateClass}${selectedId === task.id ? " selected" : ""}`);
-      const row = element("button", "row");
-      row.dataset.taskId = task.id;
-      row.setAttribute("aria-label", `${task.title}，${stateLabel(task)}${task.unread ? "，有新结果" : ""}`);
-      row.setAttribute("aria-pressed", String(selectedId === task.id));
-      const leading = element("span", "leading");
-      leading.setAttribute("aria-hidden", "true");
-      if (task.state !== "done") leading.append(element("span", "signal"));
-      row.append(leading, element("span", "task-title", task.title));
-      if (task.state !== "done") row.append(element("span", "status", stateLabel(task)));
-      if (task.unread) {
-        const mark = element("span", "new-result");
-        mark.setAttribute("aria-hidden", "true");
-        row.append(mark);
+    function tasksForPreview() {
+      const tasks = titles.slice(0, dense ? 12 : 6).map((title, index) => ({ id: `task-${index}`, title, state: "pending" }));
+      if (mixed) {
+        tasks[0] = { id: "running", title: "优化任务加载速度", state: "running" };
+        tasks[1] = { id: "question", title: "确认发布配置", state: "question" };
+        tasks[2] = { id: "failed", title: "修复构建失败", state: "failed" };
+        tasks.splice(3, 0, { id: "queued", title: "补齐接口文档", state: "queued" });
+        tasks.push({ id: "accepted", title: "已验收的任务示例", state: "accepted" });
       }
-      if (mode === "c" && task.accepted) {
-        const check = element("span", "accepted-check", "✓");
-        check.setAttribute("aria-hidden", "true");
-        row.append(check);
-      }
-      if (mode === "e" && task.state === "done") {
-        const box = element(task.accepted ? "span" : "button", "acceptance-box");
-        const shape = element("span", "box-shape", task.accepted ? "✓" : "");
-        shape.setAttribute("aria-hidden", "true");
-        box.append(shape);
-        box.setAttribute("aria-label", task.accepted ? `已验收：${task.title}` : `验收：${task.title}`);
-        if (task.accepted) box.setAttribute("role", "img");
-        else {
-          box.dataset.acceptTaskId = task.id;
-          box.onclick = () => requestAcceptance(task, mode);
-        }
-        wrapper.append(box);
-      }
-      row.onclick = () => selectTask(task);
-      wrapper.append(row);
-      return wrapper;
+      return tasks;
     }
 
-    function renderDetail(mode) {
-      const detail = element("div", "detail");
-      const selected = tasks.find(task => task.id === selectedId);
-      detail.append(element("h3", "detail-title", selected ? selected.title : "点开任务，只查看、不验收"));
-      detail.append(element("div", "detail-status", selected
-        ? `${stateLabel(selected)}${selected.state === "done" ? " · 已看过" : ""}`
-        : "验收状态常驻。右侧小点仅表示新结果，看过即消失。"));
-      if (!selected || !pending(selected)) return detail;
-      if (confirmationId !== selected.id) {
-        const accept = element("button", "control", "模拟验收");
-        accept.dataset.action = "accept";
-        accept.onclick = () => requestAcceptance(selected, mode);
-        detail.append(accept);
-        return detail;
-      }
-      const confirmation = element("div", "");
-      confirmation.setAttribute("role", "group");
-      confirmation.setAttribute("aria-label", "模拟验收确认");
-      confirmation.append(element("p", "confirm-copy", "确认模拟验收？仅改变本页演示数据。"));
-      const actions = element("div", "confirm-actions");
-      const confirm = element("button", "control", "确认模拟验收");
-      confirm.dataset.action = "confirm";
-      confirm.onclick = () => {
-        selected.accepted = true;
-        selected.unread = false;
-        confirmationId = null;
+    function dotSpecimen(zoomed) {
+      const specimen = element("div", `specimen${zoomed ? " zoom" : ""}`);
+      const stage = element("span", "sample-stage");
+      stage.setAttribute("aria-hidden", "true");
+      stage.append(element("span", "dot"));
+      specimen.append(stage, element("span", "", zoomed ? "4× 放大" : "实际尺寸"));
+      return specimen;
+    }
+
+    function renderCard(style, tasks) {
+      const card = element("section", `card style-${style.key}`);
+      card.dataset.style = style.key;
+      card.hidden = isolatedStyle !== null && isolatedStyle !== style.key;
+      card.setAttribute("aria-labelledby", `heading-${style.key}`);
+      const header = element("div", "card-header");
+      const heading = element("h2");
+      heading.id = `heading-${style.key}`;
+      heading.append(element("span", "number", style.number), document.createTextNode(style.name));
+      const isolate = element("button", "isolate", isolatedStyle === style.key ? "回到对比" : "单独看");
+      isolate.dataset.isolate = style.key;
+      isolate.setAttribute("aria-label", `${isolatedStyle === style.key ? "返回全部对比" : "单独查看"}：${style.name}`);
+      isolate.onclick = () => {
+        isolatedStyle = isolatedStyle === style.key ? null : style.key;
         render();
-        const focusTarget = document.querySelector(`#panel-${mode} [data-task-id="${selected.id}"]`)
-          || document.querySelector(`#panel-${mode} [data-filter="${filter}"]`);
-        focusTarget?.focus({ preventScroll: true });
-        announce(`「${selected.title}」已模拟验收：方案 1 出现灰勾，方案 2 清除底色，方案 3 勾上验收框。`);
+        document.querySelector(`[data-isolate="${style.key}"]`)?.focus({ preventScroll: true });
       };
-      const cancel = element("button", "control", "取消");
-      cancel.dataset.action = "cancel";
-      cancel.onclick = () => {
-        confirmationId = null;
-        render();
-        document.querySelector(`#panel-${mode} [data-action="accept"]`)?.focus({ preventScroll: true });
-        announce("已取消模拟验收，任务仍然未验收。它的常驻表达保持不变。");
-      };
-      actions.append(confirm, cancel);
-      confirmation.append(actions);
-      detail.append(confirmation);
-      return detail;
-    }
-
-    function renderPanel(mode) {
-      const panel = document.getElementById(`panel-${mode}`);
-      const base = baseTasks();
-      const project = element("div", "project");
-      project.append(element("span", "project-icon", "N"), element("span", "", "Navi"), element("small", "", "项目任务"));
-      const filters = element("div", "filters");
-      filters.setAttribute("aria-label", `方案 ${panelNames[mode]} 任务筛选`);
-      const filtersData = [
-        ["all", "全部"],
-        ["pending", `待验收 ${base.filter(pending).length}`],
-        ["accepted", `已验收 ${base.filter(task => task.accepted).length}`]
-      ];
-      for (const [key, label] of filtersData) {
-        const button = element("button", "", label);
-        button.dataset.filter = key;
-        button.setAttribute("aria-pressed", String(filter === key));
-        button.onclick = () => { filter = key; confirmationId = null; render(); };
-        filters.append(button);
-      }
+      header.append(heading, isolate);
+      const specimens = element("div", "specimens");
+      specimens.append(dotSpecimen(false), dotSpecimen(true));
       const list = element("div", "list");
-      list.setAttribute("aria-label", `方案 ${panelNames[mode]} 任务列表`);
-      const visible = base.filter(task => filter === "all" || (filter === "pending" ? pending(task) : task.accepted));
-      for (const task of visible) list.append(renderRow(task, mode));
-      if (!visible.length) list.append(element("p", "intro", "此筛选下没有任务。"));
-      panel.replaceChildren(project, filters, list, renderDetail(mode));
+      list.setAttribute("aria-label", `${style.name}任务列表`);
+      for (const task of tasks) {
+        const row = element("button", `row${selectedId === task.id ? " selected" : ""}`);
+        row.dataset.taskId = task.id;
+        row.setAttribute("aria-label", `${task.title}，${statusLabels[task.state]}`);
+        row.setAttribute("aria-pressed", String(selectedId === task.id));
+        const leading = element("span", "leading");
+        leading.setAttribute("aria-hidden", "true");
+        if (task.state === "pending") leading.append(element("span", "dot"));
+        else if (task.state !== "accepted") leading.append(element("span", `signal ${task.state}`));
+        row.append(leading, element("span", "task-title", task.title));
+        if (mixed && task.state !== "pending") row.append(element("span", "status", statusLabels[task.state]));
+        row.onclick = () => {
+          selectedId = task.id;
+          render();
+          announce(`已查看「${task.title}」· ${statusLabels[task.state]}。${task.state === "pending" ? "六版的待验收圆点都保留，不会因为看过而消失。" : "此状态的圆点不参与本次样式更换。"}`);
+        };
+        list.append(row);
+      }
+      card.append(header, element("p", "description", style.description), specimens, list, element("div", "spec", style.spec));
+      return card;
     }
 
     function render() {
       const active = document.activeElement;
-      const activePanel = active?.closest(".sidebar")?.id;
+      const activeStyle = active?.closest(".card")?.dataset.style;
       const activeTask = active?.dataset.taskId;
-      const activeFilter = active?.dataset.filter;
-      const activeAction = active?.dataset.action;
-      const positions = panels.map(mode => document.querySelector(`#panel-${mode} .list`)?.scrollTop || 0);
-      panels.forEach(renderPanel);
-      panels.forEach((mode, index) => { document.querySelector(`#panel-${mode} .list`).scrollTop = positions[index]; });
-      if (activePanel && activeTask) document.querySelector(`#${activePanel} [data-task-id="${activeTask}"]`)?.focus({ preventScroll: true });
-      if (activePanel && activeFilter) document.querySelector(`#${activePanel} [data-filter="${activeFilter}"]`)?.focus({ preventScroll: true });
-      if (activePanel && activeAction) document.querySelector(`#${activePanel} [data-action="${activeAction}"]`)?.focus({ preventScroll: true });
+      const gallery = document.getElementById("gallery");
+      gallery.classList.toggle("single", isolatedStyle !== null);
+      const tasks = tasksForPreview();
+      gallery.replaceChildren(...styles.map(style => renderCard(style, tasks)));
+      if (activeStyle && activeTask) document.querySelector(`[data-style="${activeStyle}"] [data-task-id="${activeTask}"]`)?.focus({ preventScroll: true });
       document.getElementById("density").setAttribute("aria-pressed", String(dense));
-      document.getElementById("density").textContent = dense ? "少量任务" : "大量积压";
+      document.getElementById("density").textContent = dense ? "回到短列表" : "看更密的列表";
+      document.getElementById("mixed").setAttribute("aria-pressed", String(mixed));
+      document.getElementById("mixed").textContent = mixed ? "只看待验收" : "混合其他状态";
     }
 
-    document.querySelectorAll("[data-layout]").forEach(button => {
-      button.onclick = () => {
-        const layout = button.dataset.layout;
-        document.getElementById("comparison").classList.toggle("single", layout !== "both");
-        panels.forEach(mode => { document.getElementById(`section-${mode}`).hidden = layout !== "both" && layout !== mode; });
-        document.querySelectorAll("[data-layout]").forEach(control => control.setAttribute("aria-pressed", String(control === button)));
-      };
-    });
     document.getElementById("density").onclick = () => {
       dense = !dense;
+      if (!tasksForPreview().some(task => task.id === selectedId)) selectedId = null;
       render();
-      announce(dense
-        ? `已切换到大量积压：${tasks.length} 条任务，其中 ${tasks.filter(pending).length} 条待验收。可滚动查看。`
-        : "已切换到少量任务。查看与验收状态保持不变。");
+      announce(dense ? "已切换到密集列表：对比重复排列时的视觉重量。" : "已回到短列表。圆点大小、行高和标题样式不变。");
     };
-    document.getElementById("complete").onclick = () => {
-      completionCount += 1;
-      const task = { id: `new-${completionCount}`, title: `新完成：任务列表优化 ${completionCount}`, state: "done", accepted: false, unread: true };
-      tasks.unshift(task);
-      filter = "all";
-      confirmationId = null;
-      render();
-      panels.forEach(mode => { document.querySelector(`#panel-${mode} .list`).scrollTop = 0; });
-      announce("三版都新增了一条完成结果。点开后新提示消失，但常驻验收状态保留。");
-    };
-    document.getElementById("return").onclick = () => {
-      tasks.forEach(task => { task.unread = false; });
+    document.getElementById("mixed").onclick = () => {
+      mixed = !mixed;
       selectedId = null;
-      confirmationId = null;
-      filter = "all";
       render();
-      panels.forEach(mode => { document.querySelector(`#panel-${mode} .list`).scrollTop = 0; });
-      announce("模拟过一会儿再回来：新提示与选中状态已清空，所有任务的验收状态保持不变。刷新页面会重置演示数据。");
+      announce(mixed ? "混合状态已打开。运行、答复、失败、排队圆点保持相同；已验收不画点。" : "现在只看待验收：每颗圆点都表示未验收，与是否看过无关。");
     };
     document.getElementById("theme").onclick = () => {
       const dark = document.documentElement.classList.toggle("dark");
       document.getElementById("theme").setAttribute("aria-pressed", String(dark));
       document.getElementById("theme").textContent = dark ? "浅色" : "深色";
     };
-    document.getElementById("reset").onclick = () => {
-      resetTasks();
-      panels.forEach(mode => { document.querySelector(`#panel-${mode} .list`).scrollTop = 0; });
-      announce("模拟数据已重置。真实任务始终未受影响。");
+    document.getElementById("all").onclick = () => { isolatedStyle = null; render(); };
+    document.getElementById("clear").onclick = () => {
+      selectedId = null;
+      render();
+      announce("已清除选中背景。待验收圆点仍然全部保留。");
     };
-    resetTasks();
+    render();
   </script>
 </body>
 </html>
