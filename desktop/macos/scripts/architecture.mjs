@@ -35,8 +35,24 @@ export function architectureConfig(config, architecture = "arm64") {
 }
 
 export const configuredArchitectures = (config) => ["arm64", ...((config.baseConfig ?? config).architectures?.x64 ? ["x64"] : [])];
-export const distributionName = (version, build, architecture = "arm64") =>
-  `Navi-${version}-${build}${assertArchitecture(architecture) === "x64" ? "-intel" : ""}.dmg`;
+export const distributionName = (version, architecture = "arm64") =>
+  `Navi-${version}${assertArchitecture(architecture) === "x64" ? "-intel" : ""}.dmg`;
+
+export function releaseNames(config, shortVersion, buildNumber, tag = `${config.tagPrefix}${shortVersion}`) {
+  const current = `${config.tagPrefix}${shortVersion}`;
+  const legacy = `${current}-${buildNumber}`;
+  assert.ok(tag === current || tag === legacy, "Release tag 与版本或架构不符");
+  return { tag, name: distributionName(tag === legacy ? `${shortVersion}-${buildNumber}` : shortVersion, config.architecture) };
+}
+
+export function publishedNames(config, details) {
+  for (const tag of [`${config.tagPrefix}${details.shortVersion}`, `${config.tagPrefix}${details.shortVersion}-${details.version}`]) {
+    const names = releaseNames(config, details.shortVersion, details.version, tag);
+    if (details.url?.endsWith(`/${names.tag}/${names.name}`)) return names;
+  }
+  throw new Error("更新源的下载地址与版本或架构不符，未改下载页");
+}
+
 export const recoveryName = (runId, architecture) => `mac-release-${runId}-${assertArchitecture(architecture)}`;
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

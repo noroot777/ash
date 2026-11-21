@@ -56,7 +56,7 @@ app 注册了 `navi://`（`build.sh` 写进 Info.plist）。`navi://open?project
 
 用 [Sparkle](https://sparkle-project.org) 2（版本和 sha256 钉在 `scripts/sparkle.mjs`，框架原样放进 `Contents/Frameworks`）。菜单「Navi → 检查更新…」，另外每 6 小时自己查一次。两个公开仓库，都在 `release.json` 里配：
 
-- **安装包**在 [noroot777/navi](https://github.com/noroot777/navi)（`releaseRepo`；GitHub 上要先从 noroot777/ash 改名过来，没改名时发版脚本会拦下、不去新建）：tag 为 `navi-mac-v<版本>-<构建号>` 的 GitHub Release 上的 `Navi-<版本>-<构建号>.dmg`。只出 dmg：新用户下载安装的、Sparkle 更新用的是同一个文件。
+- **安装包**在 [noroot777/navi](https://github.com/noroot777/navi)（`releaseRepo`；GitHub 上要先从 noroot777/ash 改名过来，没改名时发版脚本会拦下、不去新建）：Apple 芯片版为 `navi-mac-v<版本>` Release 上的 `Navi-<版本>.dmg`，Intel 版为 `navi-mac-intel-v<版本>` 上的 `Navi-<版本>-intel.dmg`；旧版含构建号的包及链接不变。只出 dmg：新用户下载安装的、Sparkle 更新用的是同一个文件。
 - **appcast** 在素材库 [noroot777/materials](https://github.com/noroot777/materials)（`feedRepo`）的 `navi/mac/appcast.xml`，app 的 `SUFeedURL` 是它在 raw.githubusercontent 上的那份；每一版的下载地址指向 noroot777/navi 那个 Release 上的 dmg。改名前的 Ash.app 看的是同一个仓库里的 `ash/mac/appcast.xml`（`legacyAppcastPath`）：每次发版那一份换成一条「仅通知」的条目，见「从 Ash.app 升级」。
 
 **只靠 EdDSA 签名校验**：app 是 ad-hoc 签名，没有能跨版本延续的 Apple 签名身份，而 Sparkle 的规则是「Apple 签名身份和 EdDSA 密钥至少一样不变」。所以 Info.plist 里的 `SUPublicEDKey` **永远不能换**，换了已装的 app 就再也装不上新版。appcast 本身也签（`SURequireSignedFeed`），dmg 先验签再挂载（`SUVerifyUpdateBeforeExtraction`）：被改过的 dmg 或 appcast 一律拒装。公钥由 `build.sh` 从 `release.json` 写进 Info.plist；还没配公钥的构建不带更新源，菜单里也没有「检查更新…」。
@@ -169,9 +169,9 @@ desktop/macos/build/cache/Sparkle-*/bin/generate_keys --account dev.navi.mac -x 
 
 同一条发布命令触发双架构工作流：Apple 芯片用标准 `macos-15` runner，Intel 用标准 `macos-15-intel` runner。从指定的完整 SHA 构建，只接受 main 上的源码及与源码一致的版本，不因普通 push 或 PR 自动发布。两路各自在对应架构运行 sqlite、终端和隔离服务健康检查，校验 app/Node/原生模块的 Mach-O 架构并保存恢复产物；两路构建都成功才进入串行发布。构建号基于工作流创建时间和各自更新源分配，始终比已有构建号大；不取消进行中的发布。
 
-Apple 芯片沿用 `navi/mac/appcast.xml`、`navi-mac-v…` tag 和历史 dmg 命名；Intel 使用 `navi/mac/appcast-intel.xml`、`navi-mac-intel-v…` tag 和 `Navi-<版本>-<构建号>-intel.dmg`。两者包标识和 EdDSA 公钥相同，但包内更新源不同，自动更新不会混用架构；旧 Ash 通知源只由 Apple 芯片发布更新。固定下载页同时保留两路已发布包，版本暂不一致时分别标明版本，不展示未发布的 Intel 包。不需要新增 Secret。
+Apple 芯片使用 `navi/mac/appcast.xml`、`navi-mac-v0.3.3` tag 和 `Navi-0.3.3.dmg`；Intel 使用 `navi/mac/appcast-intel.xml`、`navi-mac-intel-v0.3.3` tag 和 `Navi-0.3.3-intel.dmg`（以 0.3.3 为例）。两者包标识和 EdDSA 公钥相同，但包内更新源不同，自动更新不会混用架构；旧 Ash 通知源只由 Apple 芯片发布更新。固定下载页同时保留两路已发布包，版本暂不一致时分别标明版本，不展示未发布的 Intel 包。不需要新增 Secret。
 
-「关于 Navi」、更新提示标题、Release 标题和固定下载页标题只显示 `0.3.2` 这样的版本号，不附带日期构建号。内部 `CFBundleVersion`、更新源的排序编号以及安装包文件名和 tag 仍保留构建号，用于更新比较和精确恢复；历史安装包不改名。
+「关于 Navi」、更新提示标题、Release 标题、固定下载页标题以及新发布的 tag、安装包文件名和下载 URL 都只带 `0.3.3` 这样的版本号，不附带日期构建号。内部 `CFBundleVersion`、`sparkle:version` 和恢复清单仍保留构建号，用于更新比较和精确恢复。同一版本号不能换构建重新发布，要发不同的包就提高版本号；恢复原包补收尾不受影响。已经发布的旧 tag、安装包及链接保持原样，脚本兼容旧命名的更新源和恢复产物，不迁移或覆盖历史包。
 
 构建和安装依赖时没有发布凭证。原始 app、dmg、内容摘要、架构和构建号在对外发布前封进各自的恢复产物 `mac-release-<run id>-arm64|x64`，保留一天；tar 保留软链及可执行位。重跑优先恢复对应架构的原包，不换构建号、不重封同号 dmg。原产物已过期或缺失且已有对应 Release 时停止，改发新版本，不覆盖历史包。一次发布有一部分成功时，成功的包不撤回，失败部分靠同一工作流重跑补齐；固定页保留另一架构的现有下载。Actions 中显示的失败阶段就是恢复入口。
 

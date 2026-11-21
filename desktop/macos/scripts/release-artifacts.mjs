@@ -38,7 +38,7 @@ export function packApp(app, artifacts, name, say = console.log) {
     const packed = existsSync(source) ? readFileSync(source, "utf8").trim() : "（没有记录）";
     if (packed !== digest) {
       throw new Error(`${dmg} 是上次从另一份 app 封的（内容摘要 ${packed}，这次是 ${digest}）：同一个构建号换了包。\n`
-        + `要发这次这份就换个构建号重新构建；确定上次那份没传出去，也可以删掉 ${artifacts} 再重跑。`);
+        + `要发这次这份就提高版本号重新构建；确定上次那份没传出去，也可以删掉 ${artifacts} 再重跑。`);
     }
     say(`▶ 沿用上次没发完的 ${dmg}`);
   } else {

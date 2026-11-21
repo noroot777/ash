@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { ARCHITECTURES, architectureConfig, assertArchitecture, buildArchitecture, configuredArchitectures, distributionName, recoveryName } from "../desktop/macos/scripts/architecture.mjs";
+import { ARCHITECTURES, architectureConfig, assertArchitecture, buildArchitecture, configuredArchitectures, distributionName, publishedNames, recoveryName, releaseNames } from "../desktop/macos/scripts/architecture.mjs";
 
 const config = JSON.parse(readFileSync(new URL("../desktop/macos/release.json", import.meta.url), "utf8"));
 assert.deepEqual(configuredArchitectures(config), ["arm64", "x64"]);
@@ -14,8 +14,28 @@ assert.equal(intel.legacyAppcastPath, null);
 assert.equal(arm.publicKey, intel.publicKey);
 assert.equal(arm.downloadTag, intel.downloadTag);
 assert.equal(architectureConfig(intel, "arm64").appcastPath, arm.appcastPath);
-assert.equal(distributionName("0.3.2", "20261121.040506", "arm64"), "Navi-0.3.2-20261121.040506.dmg");
-assert.equal(distributionName("0.3.2", "20261121.040506", "x64"), "Navi-0.3.2-20261121.040506-intel.dmg");
+assert.equal(distributionName("0.3.3", "arm64"), "Navi-0.3.3.dmg");
+assert.equal(distributionName("0.3.3", "x64"), "Navi-0.3.3-intel.dmg");
+for (const channel of [arm, intel]) {
+  const shortVersion = "0.3.3";
+  const version = "20261121.040506";
+  const clean = releaseNames(channel, shortVersion, version);
+  assert.equal(clean.tag, `${channel.tagPrefix}${shortVersion}`);
+  assert.equal(clean.name, distributionName(shortVersion, channel.architecture));
+  const legacy = releaseNames(channel, shortVersion, version, `${clean.tag}-${version}`);
+  assert.equal(legacy.name, distributionName(`${shortVersion}-${version}`, channel.architecture));
+  for (const names of [clean, legacy]) {
+    const details = { shortVersion, version, url: `https://github.com/o/app/releases/download/${names.tag}/${names.name}` };
+    assert.deepEqual(publishedNames(channel, details), names);
+    assert.throws(() => publishedNames(architectureConfig(config, channel.architecture === "arm64" ? "x64" : "arm64"), details), /架构不符/);
+    assert.throws(() => publishedNames(channel, { ...details, shortVersion: "0.3.4" }), /版本或架构不符/);
+  }
+  for (const [tag, name] of [[clean.tag, legacy.name], [legacy.tag, clean.name]]) {
+    assert.throws(() => publishedNames(channel, { shortVersion, version, url: `https://github.com/o/app/releases/download/${tag}/${name}` }));
+  }
+  assert.throws(() => releaseNames(channel, shortVersion, version, `${clean.tag}-20261121.999999`));
+  assert.throws(() => publishedNames(channel, { shortVersion, version: "20261121.999999", url: `https://github.com/o/app/releases/download/${legacy.tag}/${legacy.name}` }));
+}
 assert.equal(recoveryName("123", "arm64"), "mac-release-123-arm64");
 assert.equal(recoveryName("123", "x64"), "mac-release-123-x64");
 assert.equal(buildArchitecture({}, "x64"), "x64");

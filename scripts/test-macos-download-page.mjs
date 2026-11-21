@@ -24,7 +24,7 @@ const github = {
   readFile: async () => ({ text: state.feed }),
   commitSha: async () => commit,
   findRelease: async (_repo, name) => name === config.downloadTag ? state.channel
-    : { tag_name: tag, draft: false, prerelease: false, assets: [{ name: `Navi-0.3.2-${version}.dmg`, browser_download_url: url, size: bytes.length }] },
+    : state.release ?? { tag_name: tag, draft: false, prerelease: false, assets: [{ name: `Navi-0.3.2-${version}.dmg`, browser_download_url: url, size: bytes.length }] },
   call: async (method, path, { body }) => {
     if (state.fail) throw new Error("channel rejected");
     state.writes.push({ method, path, body });
@@ -78,10 +78,24 @@ modified[0] ^= 1;
 assert.throws(() => verifyDownload(modified, signature, config.publicKey), /签名无效/);
 console.log("PASS: initial migration verifies the existing public asset's URL, length and EdDSA signature before updating the page");
 
+const cleanTag = "navi-mac-v0.3.2";
+const cleanUrl = `https://github.com/o/app/releases/download/${cleanTag}/Navi-0.3.2.dmg`;
+const cleanCandidate = { ...candidate, url: cleanUrl, page: `https://github.com/o/app/releases/tag/${cleanTag}` };
+state.feed = feed(cleanCandidate);
+state.release = { tag_name: cleanTag, draft: false, prerelease: false, assets: [{ name: "Navi-0.3.2.dmg", browser_download_url: cleanUrl, size: bytes.length }] };
+const cleanCount = state.writes.length;
+assert.equal(await initializeDownloadPage(github, config, { check: true, fetchDownload: async (address) => {
+  assert.equal(address, cleanUrl);
+  return new Response(bytes);
+} }), "已验证现有 Mac 0.3.2，未修改下载页");
+assert.equal(state.writes.length, cleanCount);
+state.feed = feed();
+state.release = null;
+
 const dualConfig = { ...config, architectures: { x64: { appcastPath: "navi/mac/appcast-intel.xml", tagPrefix: "navi-mac-intel-v", legacyAppcastPath: null } } };
 const intelConfig = architectureConfig(dualConfig, "x64");
-const intelTag = `${intelConfig.tagPrefix}${candidate.shortVersion}-${version}`;
-const intelUrl = `https://github.com/o/app/releases/download/${intelTag}/${distributionName(candidate.shortVersion, version, "x64")}`;
+const intelTag = `${intelConfig.tagPrefix}${candidate.shortVersion}`;
+const intelUrl = `https://github.com/o/app/releases/download/${intelTag}/${distributionName(candidate.shortVersion, "x64")}`;
 const intel = { ...candidate, url: intelUrl, page: `https://github.com/o/app/releases/tag/${intelTag}` };
 const feeds = new Map([[config.appcastPath, feed()]]);
 github.readFile = async (_repo, path) => feeds.has(path) ? { text: feeds.get(path) } : null;
@@ -102,4 +116,14 @@ await assert.rejects(updateDownloadChannel(github, dualConfig, candidate), /架�
 feeds.set(intelConfig.appcastPath, feed({ ...intel, version: "20261120.000001" }));
 assert.match(await updateDownloadChannel(github, dualConfig, candidate), /留在更新的/);
 assert.equal(state.channel.body, dualBody, "stale feeds cannot roll either architecture back");
+const legacyIntelTag = `${intelTag}-${version}`;
+const legacyIntelUrl = `https://github.com/o/app/releases/download/${legacyIntelTag}/Navi-0.3.2-${version}-intel.dmg`;
+const legacyIntel = { ...intel, url: legacyIntelUrl, page: `https://github.com/o/app/releases/tag/${legacyIntelTag}` };
+feeds.set(config.appcastPath, feed(cleanCandidate));
+feeds.set(intelConfig.appcastPath, feed(legacyIntel));
+state.channel = null;
+await updateDownloadChannel(github, intelConfig, legacyIntel);
+for (const address of [cleanUrl, cleanCandidate.page, legacyIntelUrl, legacyIntel.page]) assert.ok(state.channel.body.includes(address));
+await updateDownloadChannel(github, dualConfig, cleanCandidate);
+assert.ok(state.channel.body.includes(legacyIntelUrl), "new ARM releases preserve a legacy Intel download and source tag");
 console.log("PASS: both architecture choices are retained; missing Intel feeds, crossed download URLs and stale channel markers are handled safely");

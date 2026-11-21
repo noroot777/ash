@@ -1,6 +1,6 @@
 import { compareVersions } from "./appcast.mjs";
 import { downloadPage, itemDetails, latestItem } from "./release-state.mjs";
-import { ARCHITECTURES, architectureConfig, configuredArchitectures, distributionName } from "./architecture.mjs";
+import { ARCHITECTURES, architectureConfig, configuredArchitectures, publishedNames } from "./architecture.mjs";
 
 export async function updateDownloadChannel(github, config, release) {
   const architecture = config.architecture ?? "arm64";
@@ -22,11 +22,8 @@ export async function updateDownloadChannel(github, config, release) {
     const pointed = current?.body?.match(new RegExp(`<!-- ${marker}:([^ >]+) -->`))?.[1];
     if (pointed && (!details || compareVersions(pointed, details.version) > 0)) return `Mac 下载页留在更新的 ${pointed}`;
     if (!details) continue;
-    const tag = `${channel.tagPrefix}${details.shortVersion}-${details.version}`;
+    const { tag } = publishedNames(channel, details);
     const page = `https://github.com/${channel.releaseRepo}/releases/tag/${tag}`;
-    if (target !== architecture && !details.url?.endsWith(`/${tag}/${distributionName(details.shortVersion, details.version, target)}`)) {
-      throw new Error(`${ARCHITECTURES[target].label} 更新源的下载地址与架构不符，未改下载页`);
-    }
     releases.push({ ...details, architecture: target, marker, page: target === architecture ? release.page : page });
   }
   const newest = releases.reduce((best, entry) => compareVersions(entry.shortVersion, best.shortVersion) > 0 ? entry : best);

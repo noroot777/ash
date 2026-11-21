@@ -39,10 +39,10 @@ import { readEnv } from "../../../scripts/env.mjs";
 import { compareVersions, latestVersion, parseItems, previousCommit, renderAppcast, renderInformationalItem, renderItem } from "./appcast.mjs";
 import { appInfo, packApp } from "./release-artifacts.mjs";
 import { updateDownloadChannel } from "./release-channel.mjs";
-import { LINK_COMMIT_PREFIX, readConfig as loadConfig } from "./release-state.mjs";
+import { itemDetails, LINK_COMMIT_PREFIX, readConfig as loadConfig } from "./release-state.mjs";
 import { GitHub, NO_TOKEN_HINT, resolveToken } from "./github.mjs";
 import { ensureSparkle } from "./sparkle.mjs";
-import { architectureConfig, distributionName } from "./architecture.mjs";
+import { architectureConfig, publishedNames, releaseNames } from "./architecture.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MAC = resolve(HERE, "..");
@@ -183,14 +183,21 @@ async function main() {
   const current = local ? (existsSync(appcastPath) ? readFileSync(appcastPath, "utf8") : "") : remote?.text ?? "";
   const items = parseItems(current);
   const latest = latestVersion(items);
-  const tag = `${local ? "v" : config.tagPrefix}${shortVersion}-${version}`;
+  const already = items.find((item) => item.version === version);
+  if (!already && latest && compareVersions(version, latest) <= 0) die(`这一版 ${version} 不比 appcast 里最新的 ${latest} 新：Sparkle 不会把它当成更新。`);
+  if (!already && items.some((item) => itemDetails(item).shortVersion === shortVersion)) {
+    die(`${shortVersion} 已经发过了，不能用不同构建覆盖同一版本；请提高版本号后重新构建。`);
+  }
+  if (already && itemDetails(already).shortVersion !== shortVersion) die(`${version} 已用于另一版本，不能覆盖。`);
+  const recoveryTag = readEnv(process.env, "NAVI_MAC_RECOVERY_TAG") || undefined;
+  const { tag, name } = already && !local ? publishedNames(config, itemDetails(already))
+    : releaseNames({ ...config, tagPrefix: local ? "v" : config.tagPrefix }, shortVersion, version, recoveryTag);
+  if (recoveryTag && recoveryTag !== tag) die("恢复产物 tag 与已发布版本不符，不能改名或替换历史包。");
   // NAVI_MAC_RELEASE_ARTIFACTS 只给回归测试换地方，免得演练的包落进 build/releases。
   const artifacts = join(readEnv(process.env, "NAVI_MAC_RELEASE_ARTIFACTS") || join(MAC, "build", "releases"), tag);
-  const dmg = join(artifacts, distributionName(shortVersion, version, config.architecture));
+  const dmg = join(artifacts, name);
   // appcast 里已经有这一版：只有正式发版、上次签进去的那个包本地还在时才往下走（签名对上了只补收尾）。
-  const already = items.find((item) => item.version === version);
   if (already && (local || !existsSync(dmg))) die(`${version} 已经发过了（appcast 里有）。`);
-  if (!already && latest && compareVersions(version, latest) <= 0) die(`这一版 ${version} 不比 appcast 里最新的 ${latest} 新：Sparkle 不会把它当成更新。`);
 
   // ── 4. 封 dmg、签名 ──
   // 只出 dmg：人下载的和 Sparkle 更新用的是同一个文件（scripts/make-dmg.sh 里有格式上的取舍）。
@@ -272,7 +279,7 @@ async function putOnRelease(github, config, { tag, commit, dmg, length, name, bo
   const tagged = await github.tagCommit(repo, tag);
   if (tagged !== target) {
     die(`Release ${tag} 已经公开，但它的 tag 指着 ${tagged ?? "（没有）"}，不是构建提交 ${target}：appcast 没有推。`
-      + "去 Releases 页把这个 Release 和 tag 删掉后重跑。");
+      + "请核查 Release 与源码提交，改用新版本发布，不要覆盖或删除已公开的历史包。");
   }
   const published = (release.assets || []).find((a) => a.name === asset.name);
   if (!published) die(`公开后的 Release ${tag} 里找不到 ${asset.name}：appcast 没有推，重跑会接着补。`);
@@ -355,7 +362,7 @@ async function tagTarget(github, repo, commit, tag) {
   const tagged = await github.tagCommit(repo, tag);
   if (tagged && tagged !== sha) {
     die(`${repo} 里已经有 tag ${tag}，指着 ${tagged.slice(0, 12)}，不是这份 app 的构建提交 ${sha.slice(0, 12)}：`
-      + "GitHub 会沿用已有的 tag，Release 就对不上源码。删掉那个 tag 或换个构建号再发（什么都还没传）。");
+      + "GitHub 会沿用已有的 tag，Release 就对不上源码。请提高版本号重新构建，不要改动已发布的 tag（什么都还没传）。");
   }
   return sha;
 }

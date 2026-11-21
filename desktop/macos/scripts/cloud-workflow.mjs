@@ -8,7 +8,7 @@ import { compareVersions } from "./appcast.mjs";
 import { appDigest, appInfo, packApp } from "./release-artifacts.mjs";
 import { GitHub } from "./github.mjs";
 import { assertVersion, itemDetails, latestItem, nextBuildNumber, readConfig, runName, sourceVersion } from "./release-state.mjs";
-import { architectureConfig, assertArchitecture, distributionName, recoveryName } from "./architecture.mjs";
+import { architectureConfig, assertArchitecture, distributionName, recoveryName, releaseNames } from "./architecture.mjs";
 import { verifyNativeArchitecture } from "./smoke-distribution.mjs";
 import { readPublicFeed } from "./public-feed.mjs";
 
@@ -59,7 +59,8 @@ export async function prepareWorkflow({ env = process.env, root = ROOT, github, 
   if (!artifact && Number(env.GITHUB_RUN_ATTEMPT) > 1) {
     for (let page = 1; ; page++) {
       const releases = (await github.call("GET", `/repos/${config.releaseRepo}/releases?per_page=100&page=${page}`)).json;
-      if (releases.some((entry) => entry.tag_name.startsWith(`${config.tagPrefix}${request.version}-`))) {
+      const tag = `${config.tagPrefix}${request.version}`;
+      if (releases.some((entry) => entry.tag_name === tag || entry.tag_name.startsWith(`${tag}-`))) {
         throw new Error("已存在这一版的 Release，但没有原始恢复产物；停止重封，改发新版本。");
       }
       if (releases.length < 100) break;
@@ -89,7 +90,9 @@ export function verifyBundle(directory, expected) {
   assert.ok(manifest.source.startsWith(info.NaviSourceCommit) && /^[a-f0-9]{7,40}$/.test(info.NaviSourceCommit));
   assert.equal(appDigest(app), manifest.appDigest, "app 内容与恢复清单不符");
   assert.match(manifest.tag, /^[\w.-]+$/);
-  const name = distributionName(manifest.version, manifest.buildNumber, architecture);
+  const legacy = manifest.tag.endsWith(`${manifest.version}-${manifest.buildNumber}`);
+  assert.ok(legacy || manifest.tag.endsWith(manifest.version), "恢复产物 tag 与版本不符");
+  const name = distributionName(legacy ? `${manifest.version}-${manifest.buildNumber}` : manifest.version, architecture);
   const dmg = join(payload, "artifacts", manifest.tag, name);
   assert.equal(sha256(dmg), manifest.dmgSha256, "dmg 与保存的原包不同");
   assert.equal(readFileSync(`${dmg}.source`, "utf8").trim(), manifest.appDigest);
@@ -109,8 +112,8 @@ export function buildBundle(directory, request, { root = ROOT, build = true } = 
   mkdirSync(payload, { recursive: true });
   const app = join(payload, "Navi.app");
   cpSync(join(root, "desktop/macos/build/Navi.app"), app, { recursive: true, verbatimSymlinks: true });
-  const tag = `${config.tagPrefix}${request.version}-${request.buildNumber}`;
-  const dmg = packApp(app, join(payload, "artifacts", tag), distributionName(request.version, request.buildNumber, config.architecture));
+  const { tag, name } = releaseNames(config, request.version, request.buildNumber);
+  const dmg = packApp(app, join(payload, "artifacts", tag), name);
   const manifest = { ...request, tag, appDigest: appDigest(app), dmgSha256: sha256(dmg) };
   writeFileSync(join(payload, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   verifyBundle(directory, request);
@@ -153,7 +156,7 @@ export function publishBundle(directory, request, { env = process.env } = {}) {
   const bundle = verifyDistribution(directory, request);
   return withSigningKey(env, (key, childEnv) => run(process.execPath,
     [join(MAC, "scripts/release.mjs"), "--app", bundle.app, "--ed-key-file", key], {
-      env: { ...childEnv, NAVI_MAC_RELEASE_ARTIFACTS: bundle.artifacts }, stdio: "inherit",
+      env: { ...childEnv, NAVI_MAC_RELEASE_ARTIFACTS: bundle.artifacts, NAVI_MAC_RECOVERY_TAG: bundle.manifest.tag }, stdio: "inherit",
     }));
 }
 
