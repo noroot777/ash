@@ -5,7 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TerminalSessionManager } from "../../server/src/terminal.ts";
 import { terminalInputChunks } from "../src/workspace/terminalInput.ts";
-import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { launchChrome } from "./dom-stage.mjs";
+import { build, preview } from "vite";
+import { webkit } from "playwright-core";
+import { Hono } from "hono";
+import { getRequestListener } from "@hono/node-server";
+import { streamSSE } from "hono/streaming";
+import { responseCompression } from "../../server/src/response-compression.ts";
+import { execFileSync, spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const browserEngine = process.env.NAVI_TERMINAL_BROWSER ?? "chromium";
+const native = browserEngine === "native";
 
 const unicode = "a".repeat(16_383) + "😀汉字".repeat(20_000);
 const chunks = [...terminalInputChunks(unicode)];
@@ -20,6 +31,27 @@ const streams = [];
 const sizes = new Map();
 const outputOf = (sessionId) => manager.eventsAfter(sessionId, projectId, 0)
   ?.filter((event) => event.type === "data").map((event) => event.data).join("") ?? "";
+const eventApp = new Hono();
+eventApp.use("*", responseCompression());
+eventApp.get("*", (context) => {
+  context.header("access-control-allow-origin", "*");
+  const sessionId = context.req.path.split("/").at(-2);
+  const after = Number(context.req.header("last-event-id") ?? context.req.query("after") ?? 0);
+  streams.push({ sessionId, after });
+  return streamSSE(context, async (stream) => {
+    const write = (event) => stream.writeSSE({ id: String(event.seq), data: JSON.stringify(event) });
+    const stop = manager.subscribe(sessionId, projectId, (event) => void write(event));
+    stream.onAbort(() => stop?.());
+    try {
+      for (const event of manager.eventsAfter(sessionId, projectId, after) ?? []) await write(event);
+      while (!stream.aborted) {
+        await stream.writeSSE({ event: "ping", data: "1" });
+        await stream.sleep(250);
+      }
+    } finally { stop?.(); }
+  });
+});
+const eventRequest = getRequestListener(eventApp.fetch);
 const backend = createServer(async (request, response) => {
   response.setHeader("access-control-allow-origin", "*");
   response.setHeader("access-control-allow-headers", "content-type,last-event-id,x-navi-human-action-token");
@@ -36,15 +68,7 @@ const backend = createServer(async (request, response) => {
   if (path.startsWith(base)) {
     const [, sessionId, action] = path.slice(base.length).split("/");
     if (action === "events") {
-      const after = Number(request.headers["last-event-id"] ?? url.searchParams.get("after") ?? 0);
-      streams.push({ sessionId, after });
-      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-      response.write(": connected\n\n");
-      const write = (event) => response.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
-      for (const event of manager.eventsAfter(sessionId, projectId, after) ?? []) write(event);
-      const stop = manager.subscribe(sessionId, projectId, write);
-      response.on("close", () => stop?.());
-      return;
+      return eventRequest(request, response);
     }
     const parts = [];
     for await (const chunk of request) parts.push(chunk);
@@ -71,10 +95,72 @@ const backend = createServer(async (request, response) => {
 });
 await new Promise((resolve) => backend.listen(0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${backend.address().port}`;
-const web = await startWebServer();
+process.env.NAVI_PROXY = origin;
+let web;
 let browser;
+let nativeProbe;
 try {
-  browser = await launchChrome();
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const outDir = join(scratch, "web");
+  await build({ root, logLevel: "error", build: { outDir, rollupOptions: {
+    input: join(root, "scripts/fixtures/terminal-interaction.html"),
+  } } });
+  const server = await preview({ root, logLevel: "error", build: { outDir }, preview: {
+    host: "127.0.0.1", port: 0, strictPort: false,
+    proxy: { "/api": { target: origin, changeOrigin: true } },
+  } });
+  const address = server.httpServer.address();
+  web = { origin: `http://127.0.0.1:${address.port}`, close: () => new Promise((resolve, reject) => {
+    server.httpServer.closeAllConnections();
+    server.httpServer.close((error) => error ? reject(error) : resolve());
+  }) };
+  if (native) {
+    const executable = join(scratch, "native-terminal-probe");
+    const source = (path) => fileURLToPath(new URL(path, import.meta.url));
+    execFileSync("swiftc", ["-parse-as-library", source("../../desktop/macos/Sources/NaviWebView.swift"),
+      source("../../desktop/macos/Tests/TerminalWebViewProbe.swift"), "-o", executable], { timeout: 60_000 });
+    const file = join(scratch, "native-vi.txt");
+    const probe = spawn(executable, [`${web.origin}/scripts/fixtures/terminal-interaction.html`, "/tmp/navi-native-terminal.png"], { stdio: ["ignore", "pipe", "inherit"] });
+    nativeProbe = probe;
+    let pending = "";
+    probe.stdout.on("data", (data) => {
+      pending += data;
+      const lines = pending.split("\n");
+      pending = lines.pop();
+      for (const line of lines) {
+        console.log(line);
+        const session = manager.listForProject(projectId)[0];
+        if (line === "NATIVE_SHELL_READY") manager.write(session.id, projectId, `vi -N -i NONE -n '${file}'\r`);
+        if (line === "NATIVE_SHELL_RESTORED") manager.write(session.id, projectId, "printf '\\137\\137NATIVE_DONE__\\n'\r");
+      }
+    });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        probe.kill("SIGKILL");
+        reject(new Error("native terminal probe timed out"));
+      }, 120_000);
+      probe.on("error", (error) => { clearTimeout(timer); reject(error); });
+      probe.on("exit", (code) => {
+        clearTimeout(timer);
+        code === 0 ? resolve() : reject(new Error(`native probe exited ${code}`));
+      });
+    });
+    assert.equal(readFileSync(file, "utf8"), "top-native-vi-line\nsecond-line\n");
+  } else {
+    await runBrowser();
+  }
+} finally {
+  nativeProbe?.kill();
+  await browser?.close();
+  manager.shutdown();
+  backend.closeAllConnections();
+  await new Promise((resolve) => backend.close(resolve));
+  await web?.close();
+  rmSync(scratch, { recursive: true, force: true });
+}
+
+async function runBrowser() {
+  browser = browserEngine === "webkit" ? await webkit.launch() : await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1100, height: 850 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -88,9 +174,10 @@ try {
       }
     };
   });
-  await page.route("**/api/**", (route) => route.fulfill({
-    status: 307, headers: { location: origin + new URL(route.request().url()).pathname + new URL(route.request().url()).search },
-  }));
+  await page.route("**/api/**", (route) => {
+    const url = new URL(route.request().url());
+    return route.continue({ url: origin + url.pathname + url.search });
+  });
   await page.goto(`${web.origin}/scripts/fixtures/terminal-interaction.html`);
   await page.getByRole("button", { name: "终端", exact: true }).click();
   const viewport = page.locator(".project-terminal__viewport:not([hidden])");
@@ -104,6 +191,7 @@ try {
     console.error("INPUT", JSON.stringify(inputs.slice(-20)));
     console.error("OUTPUT", JSON.stringify(manager.listForProject(projectId).map((session) => outputOf(session.id).slice(-2500))));
     console.error("SCREEN", await viewport.innerText());
+    console.error("ERRORS", errors);
     await page.screenshot({ path: "/tmp/navi-terminal-failure.png" });
     throw new Error(`Timed out: ${description}`);
   };
@@ -122,9 +210,9 @@ try {
     await page.keyboard.press("Enter");
     await waitFor(() => outputOf(first).includes("\r\n__ZLE_READY__\r\n"), "emacs shell keymap ready");
     const file = join(scratch, "vi-edit.txt");
-    await page.keyboard.type(`vi -u NONE -i NONE '${file}'`);
+    await page.keyboard.type(`vi -N -i NONE '${file}'`);
     await page.keyboard.press("Enter");
-    await waitFor(() => viewport.innerText().then((text) => text.includes("New File")), "vi alternate screen");
+    await waitFor(() => viewport.innerText().then((text) => /\[New(?: File)?\]/.test(text)), "vi alternate screen");
     await page.keyboard.type("iheader");
     await page.keyboard.press("Enter");
     await page.keyboard.type("tail");
@@ -146,6 +234,9 @@ try {
     await waitFor(() => existsSync(file), "vi wrote file");
     assert.equal(readFileSync(file, "utf8"), "TOP-header\ntail\n");
     await waitFor(() => outputOf(first).lastIndexOf("\x1b[?2004h") > outputOf(first).lastIndexOf("\x1b[?1049l"), "shell restored after vi");
+    await page.keyboard.type("printf '\\137\\137VI_EXIT_READY__\\n'");
+    await page.keyboard.press("Enter");
+    await waitFor(() => viewport.innerText().then((text) => text.includes("__VI_EXIT_READY__")), "shell return rendered after vi");
 
     const paste = async (text) => input.evaluate((element, text) => {
       const clipboardData = new DataTransfer();
@@ -220,11 +311,4 @@ try {
   assert.equal(await page.getByTestId("notices").textContent(), "");
   assert.deepEqual(errors, []);
   console.log("PASS: terminal key ownership, themes, font sizes, persistence, narrow layout, no session recreation");
-} finally {
-  await browser?.close();
-  manager.shutdown();
-  backend.closeAllConnections();
-  await new Promise((resolve) => backend.close(resolve));
-  await web.close();
-  rmSync(scratch, { recursive: true, force: true });
 }

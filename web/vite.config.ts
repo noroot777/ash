@@ -16,6 +16,9 @@ const interPackageRoot = dirname(require.resolve("@fontsource-variable/inter/pac
 export default defineConfig({
   // 真人动作凭据:dev / preview 交出的文档上也得有(理由见 vite/page-token.ts)。
   plugins: [react(), tailwindcss(), brandHead(), pageTokenPlugin(), retainPreviousAssets()],
+  resolve: {
+    alias: [{ find: /^@xterm\/xterm$/, replacement: require.resolve("@xterm/xterm/lib/xterm.js") }],
+  },
   server: {
     // 端口不写死。两件事都得让开：
     // ① navi 起预览时会借一个空闲端口用环境变量 PORT 递进来（server/src/preview.ts 的
