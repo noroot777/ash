@@ -1,0 +1,102 @@
+name: Release Mac
+run-name: mac ${{ inputs.version }} ${{ inputs.source_sha }} ${{ inputs.publish && 'publish' || 'build' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Mac 版本，例如 0.3.2'
+        required: true
+        type: string
+      source_sha:
+        description: '已推送到 main 的完整提交 SHA'
+        required: true
+        type: string
+      publish:
+        description: '公开发布（关闭时只构建和校验，不访问发布 Secret）'
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: navi-mac-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      NAVI_MAC_VERSION: ${{ inputs.version }}
+      NAVI_MAC_SOURCE_SHA: ${{ inputs.source_sha }}
+      NAVI_MAC_PUBLISH: ${{ inputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '26.13.1'
+          package-manager-cache: false
+      - name: Check publish configuration without exposing credentials
+        if: inputs.publish
+        env:
+          RELEASE_READY: ${{ secrets.MAC_RELEASE_TOKEN != '' && secrets.MAC_SPARKLE_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$RELEASE_READY" != true ]; then
+            echo '配置 MAC_RELEASE_TOKEN 和 MAC_SPARKLE_PRIVATE_KEY Secrets 后再公开发布。' >&2
+            exit 1
+          fi
+      - name: Validate request and locate recovery artifact
+        id: request
+        run: node desktop/macos/scripts/cloud-workflow.mjs validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Restore original distribution
+        if: steps.request.outputs.restore == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ steps.request.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/navi-mac-release
+      - name: Unpack and verify recovery artifact
+        if: steps.request.outputs.restore == 'true'
+        run: node desktop/macos/scripts/cloud-workflow.mjs restore
+      - name: Install build dependencies without release credentials
+        if: steps.request.outputs.restore != 'true'
+        run: npm ci
+      - name: Build app and seal original dmg
+        if: steps.request.outputs.restore != 'true'
+        run: node desktop/macos/scripts/cloud-workflow.mjs build
+      - name: Verify app signature and disk image
+        run: node desktop/macos/scripts/cloud-workflow.mjs verify
+      - name: Save original distribution before any publication
+        if: steps.request.outputs.restore != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mac-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/navi-mac-release/bundle.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+      - name: Sign and publish release, feeds, and Mac download page
+        if: inputs.publish
+        run: node desktop/macos/scripts/cloud-workflow.mjs publish
+        env:
+          GH_TOKEN: ${{ secrets.MAC_RELEASE_TOKEN }}
+          MAC_SPARKLE_PRIVATE_KEY: ${{ secrets.MAC_SPARKLE_PRIVATE_KEY }}
+      - name: Remove temporary signing material
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/navi-mac-signing"

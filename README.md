@@ -36,11 +36,9 @@ Navi 管的不是某一个 AI 编程工具，而是管这些工具怎么干活�
 
 ## Mac 客户端
 
-<!-- navi-mac-download -->
-**[下载 Navi 0.3.1（20261121.032133）](https://github.com/noroot777/navi/releases/download/navi-mac-v0.3.1-20261121.032133/Navi-0.3.1-20261121.032133.dmg)**
-<!-- /navi-mac-download -->
+**[下载 Mac 最新版](https://github.com/noroot777/navi/releases/tag/navi-mac-latest)**
 
-<!-- 标记之间由发版脚本（npm run release:mac）自动替换为 dmg 直链。 -->
+打开 Mac 专用下载页后，点击安装包链接；这个入口不随版本变化。
 
 自带 Node 和 Navi 本体，装好就能用。要求 Apple 芯片（M 系列）、macOS 14+。
 
