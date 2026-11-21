@@ -2,12 +2,18 @@ import type { FreeWorkflowPreviewState } from "./free-workflow.ts";
 
 export type BrowserControl = "agent" | "user";
 export type BrowserDisplayMode = "responsive" | "scaled";
+export interface ComputerUseTarget {
+  application: string;
+  name: string;
+  windowTitle?: string;
+}
 export interface ComputerUseFrame {
   path: string;
   tool: string;
   at: string;
   sessionId: string;
   turnStartedAt: string;
+  target?: ComputerUseTarget;
 }
 export interface BrowserTarget {
   ref: string;

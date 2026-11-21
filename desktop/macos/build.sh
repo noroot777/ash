@@ -68,7 +68,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Framewor
 cp "$HERE/../../docs/logo/loader.svg" "$APP/Contents/Resources/loader.svg"
 
 swiftc -O -swift-version 5 -target arm64-apple-macos14.0 \
-  -framework AppKit -framework WebKit -F "$SPARKLE" -framework Sparkle \
+  -framework AppKit -framework WebKit -framework ScreenCaptureKit -F "$SPARKLE" -framework Sparkle \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   "$HERE"/Sources/*.swift -o "$APP/Contents/MacOS/Navi"
 # 框架原样放进去（ditto 保住里面的软链和 Sparkle 自己的签名）。

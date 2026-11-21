@@ -30,7 +30,7 @@ export type NativeAgentActivity =
   // `version` = 记这笔账时正文的**协议身份**(message 的 messageId / result 的调用 id)。
   // 展示端两边都带身份时必须一致才配对:同文同代都证明不了同一份快照 —— 两条独立消息
   // 恰好同文时,旧身份的冻结配给新话就是把旧字节安在新画面上(第 10 轮审查 R2)。
-  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean; field?: "message" | "result"; rev?: number; version?: string; computer?: string };
+  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean; field?: "message" | "result"; rev?: number; version?: string; computer?: string; computerTarget?: import("./task-runtime.ts").ComputerUseTarget };
 
 export type NativeWorkEvent = (
   | { type: "activity"; id: string; event: NativeAgentActivity }

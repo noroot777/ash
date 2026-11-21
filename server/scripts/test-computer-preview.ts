@@ -11,7 +11,10 @@ process.env.NAVI_RUNS_DIR = join(root, "runs");
 process.env.NAVI_UPLOADS_DIR = join(root, "uploads");
 const { imageStore } = await import("../src/agent-attachments.js");
 const { ComputerToolImages, isComputerTool, toolImageEvents } = await import("../src/executors/computer-images.js");
-const { computerUseFrame, clearComputerFrame } = await import("../src/computer-preview.js");
+const { computerUseFrame, activeComputerUseFrame, clearComputerFrame } = await import("../src/computer-preview.js");
+const { computerApplicationCommand } = await import("../src/computer-application.js");
+const { validComputerTarget } = await import("../src/executors/computer-targets.js");
+const { markTurnActive, clearTurnActive } = await import("../src/session-turn-registry.js");
 const { appendSessionTrace, sessionTracePath } = await import("../src/transcript.js");
 const { parseBrowserAction } = await import("@navi/shared/task-runtime");
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
@@ -49,6 +52,55 @@ try {
   assert.equal(tracker.result({ tool_use_id: "unknown", content }, imageStore())[0]?.computer, undefined);
   const dynamic = toolImageEvents([{ type: "image", imageUrl: `data:image/png;base64,${png}` }], imageStore(), "cua_repl.js")[0]!;
   assert.ok(dynamic.computer);
+  const native = imageStore();
+  const messageTarget = { application: "/System/Applications/Messages.app", name: "信息", windowTitle: "未命名" };
+  const selected = toolImageEvents({ content: [{ type: "text", text: 'Window: "未命名", App: 信息.' }, ...content] }, native, "cua_repl.js", false,
+    { code: 'let messagesDemo = await cua.getApp("/System/Applications/Messages.app");' })[0]!;
+  assert.deepEqual(selected.computerTarget, messageTarget);
+  const screenshot = (code: string, store = native) => toolImageEvents({ content }, store, "cua_repl.js", false, { code })[0]!;
+  assert.deepEqual(screenshot("await nodeRepl.emitImage(await messagesDemo.getScreenshot())").computerTarget, messageTarget);
+  const notesTarget = { application: "com.apple.Notes", name: "备忘录", windowTitle: "备忘录" };
+  toolImageEvents({ content: [{ type: "text", text: 'Window: "备忘录", App: 备忘录.' }] }, native, "cua_repl.js", false,
+    JSON.stringify({ code: "const notes = await cua.getApp('com.apple.Notes')" }));
+  assert.deepEqual(screenshot("await notes.getAXStateAndScreenshot()").computerTarget, notesTarget);
+  assert.deepEqual(screenshot("await messagesDemo.getScreenshot()").computerTarget, messageTarget);
+  assert.equal(screenshot("await unknown.getScreenshot()").computerTarget, undefined);
+  assert.equal(screenshot("await messagesDemo.getScreenshot()", imageStore()).computerTarget, undefined);
+  assert.equal(screenshot("await notes.getScreenshot(); await messagesDemo.getScreenshot()").computerTarget, undefined);
+  assert.equal(screenshot("await tab.screenshot()").computerTarget, undefined);
+  assert.equal(screenshot("await cua.getState()").computerTarget, undefined);
+  const browserImages = imageStore();
+  assert.equal(toolImageEvents({ content }, browserImages, "cua_repl.js", false, { code: 'let tab = await cua.getTab("tab-1", {browser:"chrome"})' })[0]!.computer, undefined);
+  assert.deepEqual(toolImageEvents({ content }, browserImages, "cua_repl.js", false, { code: "await nodeRepl.emitImage(await tab.screenshot())" }), []);
+  const browserFrame = toolImageEvents({ content }, imageStore(), "cua_repl.js", false,
+    { code: 'await cua.createBrowserTab("iab", "about:blank")' })[0]!;
+  assert.equal(browserFrame.computer, undefined);
+  assert.deepEqual(screenshot("await messagesDemo.getScreenshot()").computerTarget, messageTarget);
+  toolImageEvents({ isError: true, content: [{ type: "text", text: "not allowed to use the app for safety reasons" }] }, native, "cua_repl.js", false,
+    { code: 'notes = await cua.getApp("com.openai.codex")' });
+  assert.equal(screenshot("await notes.getScreenshot()").computerTarget, undefined);
+  toolImageEvents({}, native, "cua_repl.js", false, { code: "notes = await cua.getApp(appId)" });
+  assert.equal(screenshot("await notes.getScreenshot()").computerTarget, undefined);
+  assert.equal(toolImageEvents({ content }, native, "cua_repl.js", false, { code: 'await cua.getApp("Unknown")' })[0]!.computerTarget, undefined);
+  const changedWindow = toolImageEvents({ content: [{ type: "text", text: 'Window: "新的对话", App: 信息.' }, ...content] }, native, "cua_repl.js", false,
+    { code: "await messagesDemo.getAXStateAndScreenshot()" })[0]!;
+  assert.deepEqual(changedWindow.computerTarget, { ...messageTarget, windowTitle: "新的对话" });
+  toolImageEvents({}, native, "cua_repl.js_reset");
+  assert.equal(screenshot("await messagesDemo.getScreenshot()").computerTarget, undefined);
+  const claudeNative = new ComputerToolImages();
+  claudeNative.call({ id: "select", name: "js", toolset_name: "cua_repl", input: { code: 'let app = await cua.getApp("信息")' } });
+  assert.deepEqual(claudeNative.result({ tool_use_id: "select", content: [{ type: "text", text: 'Window: "未命名", App: 信息.' }, ...content] }, native)[0]!.computerTarget,
+    { application: "信息", name: "信息", windowTitle: "未命名" });
+  for (const application of ["com.apple.Notes", "Google Chrome", "/Applications/My Editor.app"]) {
+    assert.deepEqual(computerApplicationCommand({ application, name: "目标应用" }),
+      { file: "/usr/bin/open", args: [application === "com.apple.Notes" ? "-b" : "-a", application] });
+  }
+  for (const application of ["", " ", "-a", "--args", " Notes", "Notes ", "Notes\n", "Notes\u007f", "https://example.com/", "file:///Applications/Notes.app", "relative/Notes.app", "/bin/sh", "mailto:user@example.com"]) {
+    assert.throws(() => computerApplicationCommand({ application, name: "目标应用" }), /无效/);
+  }
+  for (const invalid of [null, [], messageTarget.application, JSON.stringify(messageTarget), { application: messageTarget.application }, { ...messageTarget, name: " " }, { ...messageTarget, windowTitle: 42 }]) {
+    assert.equal(validComputerTarget(invalid), false);
+  }
 
   appendSessionTrace("task", "codex-session", turn, first, turn);
   assert.equal(computerUseFrame("task")?.path, first.path);
@@ -74,6 +126,22 @@ try {
   const persistedPath = join(root, "runs", "task", "computer-preview.json");
   writeFileSync(persistedPath, JSON.stringify(persistedFrame));
   assert.deepEqual(computerUseFrame("task"), persistedFrame);
+  assert.equal(activeComputerUseFrame("task"), null);
+  assert.equal(markTurnActive({ sessionId: "codex-session", taskId: "task", startedAt: turn }), true);
+  assert.deepEqual(activeComputerUseFrame("task"), persistedFrame);
+  clearTurnActive("codex-session", turn);
+  assert.equal(activeComputerUseFrame("task"), null);
+  assert.equal(markTurnActive({ sessionId: "codex-session", taskId: "task", startedAt: later }), true);
+  assert.equal(activeComputerUseFrame("task"), null);
+  appendSessionTrace("task", "codex-session", later, selected, later);
+  assert.deepEqual(activeComputerUseFrame("task")?.target, messageTarget);
+  clearTurnActive("codex-session", later);
+  assert.equal(activeComputerUseFrame("task"), null);
+  assert.ok(computerUseFrame("task"));
+  for (const target of [null, {}, JSON.stringify(messageTarget), { ...messageTarget, application: "--args" }]) {
+    writeFileSync(persistedPath, JSON.stringify({ ...persistedFrame, target }));
+    assert.deepEqual(computerUseFrame("task"), persistedFrame);
+  }
   for (const name of browserTools) {
     writeFileSync(persistedPath, JSON.stringify({ ...persistedFrame, tool: name }));
     assert.equal(computerUseFrame("task"), null, name);
@@ -86,7 +154,7 @@ try {
   }
   assert.deepEqual(parseBrowserAction({ action: "viewport", mode: "responsive", width: 640, height: 800 }), { action: "viewport", mode: "responsive", width: 640, height: 800 });
   assert.throws(() => parseBrowserAction({ action: "viewport", mode: "invalid", width: 640, height: 800 }), /显示模式/);
-  console.log("PASS computer preview: computer-only classification, browser and legacy frame exclusion, Codex/Claude correlation, screenshot reuse, dynamic images, validated persisted frames, child activity, task isolation and deletion");
+  console.log("PASS computer preview: native target correlation, safe application commands, active-turn lifecycle, computer-only classification, Codex/Claude correlation, persisted frames and task isolation");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

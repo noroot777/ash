@@ -9,16 +9,31 @@ import { developmentService, startDevelopmentService, stopDevelopmentService } f
 import { refreshBrowserFrame, taskBrowserAction, taskBrowserState } from "./task-browser.js";
 import { browserFrame } from "./task-browser-store.js";
 import { runtimeCaller } from "./task-runtime-auth.js";
-import { computerUseFrame } from "./computer-preview.js";
+import { activeComputerUseFrame } from "./computer-preview.js";
+import { activateComputerApplication } from "./computer-application.js";
+import { isLocalDirect } from "./auth/remote-access.js";
 
 const errorBody = (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) });
 
-export function mountTaskRuntimeRoutes(api: Hono): void {
+export function mountTaskRuntimeRoutes(api: Hono, activate = activateComputerApplication): void {
   api.get("/tasks/:id/runtime", async (c) => {
     const taskId = c.req.param("id");
     await requireTaskAccess(actorOf(c), taskId);
     c.header("cache-control", "no-store");
-    return c.json({ service: developmentService(taskId), browser: taskBrowserState(taskId), computer: computerUseFrame(taskId) });
+    return c.json({ service: developmentService(taskId), browser: taskBrowserState(taskId), computer: activeComputerUseFrame(taskId) });
+  });
+  api.post("/tasks/:id/runtime/computer/activate", async (c) => {
+    const taskId = c.req.param("id");
+    try {
+      const caller = await runtimeCaller(c, taskId);
+      if (caller.agent || !isLocalDirect(c)) return c.json({ error: "只有本机用户可以切换电脑操作应用" }, 403);
+      const body = await c.req.json();
+      const frame = activeComputerUseFrame(taskId);
+      if (!frame?.target || frame.sessionId !== body.sessionId || frame.turnStartedAt !== body.turnStartedAt
+        || frame.target.application !== body.application) throw new Error("电脑操作已结束或目标已改变，请等待当前画面");
+      await activate(frame.target);
+      return c.json({ activated: true });
+    } catch (error) { return c.json(errorBody(error), 409); }
   });
   api.post("/tasks/:id/runtime/service", async (c) => {
     const taskId = c.req.param("id");

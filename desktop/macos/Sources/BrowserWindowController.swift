@@ -11,6 +11,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private(set) var welcoming = false
   var downloads: [ObjectIdentifier: DownloadTransaction] = [:]
   private var chrome: WindowChrome?
+  var computerPreview: ComputerPreviewBridge?
   private var observations: [NSKeyValueObservation] = []
   private var healthTimer: Timer?
   private var guardTimer: Timer?
@@ -63,6 +64,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     super.init(window: window)
 
     window.delegate = self
+    computerPreview = ComputerPreviewBridge(webView: webView, origin: NaviConfig.windowURL, local: NaviConfig.isLocal)
     window.contentView = makeContent()
     // 内容铺到窗口顶，红绿灯浮在页面上（见 WindowChrome）。窗口底色仍跟页面的 theme-color 走，
     // 页面还没画出来的那一瞬和占位页都是同一个底色。
@@ -180,6 +182,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   func windowWillEnterFullScreen(_ notification: Notification) { chrome?.setFullScreen(true) }
   func windowDidFailToEnterFullScreen(_ window: NSWindow) { chrome?.setFullScreen(false) }
   func windowDidExitFullScreen(_ notification: Notification) { chrome?.setFullScreen(false) }
+  func windowWillClose(_ notification: Notification) { computerPreview?.stop() }
 
   /// 把页面载进来。连别处的 navi 时直接载；本机地址先认一次人、把那一份的实例号交给页面再载。
   func loadPage() {
@@ -233,6 +236,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   /// 主框架换上了新文档（WebViewBridge）。不比对是哪一次导航：页面自己的跳转顶掉了这一次也一样，
   /// 等的是「窗口里这份文档表态」，计时从这份文档算起。
   func pageDidCommit() {
+    computerPreview?.stop()
     documentSerial += 1
     guard handoff != nil else { return }
     let document = documentSerial
@@ -322,6 +326,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   /// 端口上不再是认过的那一份：页面连同它的轮询、SSE 一起撤掉（一个请求都不再发给新来的那份），
   /// 记下路由，回到 loadHome 认一遍 —— 被占着就盖上说明，自己那份回来了再载回去。
   func instanceLost() {
+    computerPreview?.stop()
     stopInstanceGuard()
     // 下面换上的空白文档也会「提交、载完」，别把它当成页面接上了。
     handoff = nil

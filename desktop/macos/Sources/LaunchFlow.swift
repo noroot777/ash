@@ -15,6 +15,7 @@ extension BrowserWindowController {
 
   /// 页面载不进来（导航失败）。本机地址重走一遍 connect —— 服务可能挂了，也可能端口换了人。
   func showOffline(_ error: Error) {
+    computerPreview?.stop()
     stopInstanceGuard()
     if NaviConfig.isLocal { connect(); return }
     offlineView.show(title: "连不上 Navi",
