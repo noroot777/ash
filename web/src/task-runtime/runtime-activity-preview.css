@@ -10,9 +10,7 @@
 .runtime-activity-preview button:hover { background: var(--hover-bg); color: var(--ink); }
 .runtime-activity-preview :focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
 .runtime-activity-preview img { display: block; width: 100%; max-height: 200px; object-fit: contain; background: var(--canvas); cursor: zoom-in; }
-.runtime-activity-image { display: block; width: 100%; min-height: 100px; padding: 0; border: 0; background: var(--canvas); }
-.runtime-activity-image img { cursor: pointer; }
-.runtime-activity-image > span, .runtime-activity-preview > p { display: block; margin: 0; padding: 12px; color: var(--muted); font-size: var(--t-xs); }
+.runtime-activity-preview > p { display: block; margin: 0; padding: 12px; color: var(--muted); font-size: var(--t-xs); }
 @media (max-width: 720px) {
   .runtime-activity-preview { top: 56px; right: 8px; width: min(200px, calc(100% - 16px)); }
   .runtime-activity-preview img { max-height: 128px; }

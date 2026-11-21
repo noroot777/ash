@@ -59,7 +59,6 @@ export interface InspectorTabPolicy {
 
 export interface InspectorHostControls {
   visible: boolean;
-  activeTabId: string | null;
   toggle: () => void;
   /** 切到 `id` 那一格（不在条上就加上去、整栏收着就展开）。`request` 是带给那一格的话，见 nav.tsx。 */
   openTab: (id: string, request?: Readonly<Record<string, unknown>>) => void;

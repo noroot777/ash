@@ -2,7 +2,7 @@ import type { AgentEvent } from "@navi/shared";
 import { persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 
 export function isComputerTool(name: string): boolean {
-  return /^(?:computer(?:_use)?|mcp[._]+(?:cua|cua_repl|computer|computer_use|unified_computer_use|claude_in_chrome|playwright)[._]+\w+|(?:cua|cua_repl|computer|computer_use|unified_computer_use|claude_in_chrome|playwright)[._]+\w+)$/i.test(name);
+  return /^(?:computer(?:_use)?|mcp[._]+(?:cua|cua_repl|computer|computer_use|unified_computer_use)[._]+\w+|(?:cua|cua_repl|computer|computer_use|unified_computer_use)[._]+\w+)$/i.test(name);
 }
 
 export function toolImageEvents(value: unknown, seen: ImageStore, tool: string, allowBareBase64 = false): Extract<AgentEvent, { kind: "attachment" }>[] {

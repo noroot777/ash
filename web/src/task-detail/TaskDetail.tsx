@@ -5,6 +5,7 @@ import { isUserFollowUp } from "@navi/shared";
 import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
 import { usePreviewTab } from "../preview-workspace/previewTab.tsx";
 import { RuntimeActivityPreview } from "../task-runtime/RuntimeActivityPreview.tsx";
+import { RuntimeAutoOpen } from "../task-runtime/RuntimeAutoOpen.tsx";
 import { PlanModeChip } from "./PlanModeChip.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
@@ -344,7 +345,7 @@ export function TaskDetail({
         tabPolicy={inspectorPolicy}
         reveal={fileViewReveal}
       >
-        {({ toggleButton, openTab, activeTabId }) => (
+        {({ toggleButton, openTab }) => (
           <>
             <div className="task-detail">
               <TaskHeader
@@ -555,7 +556,8 @@ export function TaskDetail({
                   </section>
                 </div>
               )}
-              <RuntimeActivityPreview runtime={runtime} activeTabId={activeTabId} openTab={openTab} />
+              <RuntimeAutoOpen taskId={task.id} browser={runtime.state.browser} openTab={openTab} />
+              <RuntimeActivityPreview runtime={runtime} />
               {markDoneOpen && (
                 <ConfirmDialog
                   title="标记为已完成"

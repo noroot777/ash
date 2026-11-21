@@ -25,6 +25,7 @@ const { taskBrowserState, closeTaskBrowser } = await import("../src/task-browser
 const { browserFile } = await import("../src/task-browser-store.js");
 const { startDevelopmentService } = await import("../src/task-runtime-service.js");
 const { appendSessionTrace } = await import("../src/transcript.js");
+const { clearComputerFrame } = await import("../src/computer-preview.js");
 const screenshots = process.env.NAVI_RUNTIME_SCREENSHOTS || join(root, "screenshots");
 mkdirSync(screenshots, { recursive: true });
 const repo = join(root, "repo");
@@ -232,16 +233,14 @@ try {
     assert.ok(await page.getByRole("link", { name: "打开", exact: true }).count());
     await page.screenshot({ path: join(screenshots, "runtime-service-inspector.png") });
     await tab("信息").click();
+    clearComputerFrame("runtime", "computer-session");
     observed = await action({ action: "open" });
     browserId = observed.state.id;
     const mini = page.getByRole("complementary", { name: "浏览器操作" });
-    await mini.getByRole("img").waitFor();
-    assert.equal(await pane.count(), 0);
-    assert.ok((await mini.boundingBox())!.width <= 304);
-    await page.screenshot({ path: join(screenshots, "shared-browser-mini.png") });
-    await mini.getByRole("button", { name: "展开共享浏览器" }).click();
     await page.getByRole("button", { name: "接管", exact: true }).waitFor();
     await pane.getByRole("img").waitFor();
+    assert.equal(await mini.count(), 0);
+    assert.equal(await computer.count(), 0);
     await page.waitForFunction(() => {
       const viewport = document.querySelector<HTMLElement>(".task-browser-viewport")!;
       const image = viewport.querySelector("img")!;
@@ -258,6 +257,12 @@ try {
       const viewport = document.querySelector<HTMLElement>(".task-browser-viewport")!;
       return viewport.querySelector("img")!.naturalWidth === viewport.clientWidth;
     });
+    appendSessionTrace("runtime", "computer-session", stamp, { kind: "attachment", path: "/data/uploads/runtime-computer.png", computer: "cua_repl.js" });
+    await computerImage.waitFor();
+    assert.equal(await mini.count(), 0);
+    await page.screenshot({ path: join(screenshots, "computer-use-with-browser.png") });
+    clearComputerFrame("runtime", "computer-session");
+    await computer.waitFor({ state: "hidden" });
     const share = await page.evaluate(() => document.querySelector(".inspector-host")!.getBoundingClientRect().width / window.innerWidth);
     assert.ok(share > 0.45 && share < 0.55, `浏览器那一格约占一半宽，实际 ${share}`);
     assert.equal(taskBrowserState("runtime")?.control, "agent");
@@ -284,6 +289,8 @@ try {
     await page.reload();
     await tab("浏览器").waitFor();
     assert.equal(await pane.count(), 0);
+    assert.equal(await page.locator(".runtime-activity-preview").count(), 0);
+    await page.screenshot({ path: join(screenshots, "shared-browser-no-preview.png") });
     await tab("浏览器").click();
     await pane.getByRole("img").waitFor();
     await page.reload();

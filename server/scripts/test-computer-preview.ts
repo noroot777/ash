@@ -19,10 +19,11 @@ const content = [{ type: "image", data: png, mimeType: "image/png" }];
 const turn = "2026-11-21T01:00:00.000Z";
 
 try {
-  for (const name of ["computer", "computer.screenshot", "cua_repl.js", "mcp__cua_repl__js", "cua_repl.js", "mcp__claude_in_chrome__computer", "playwright.browser_take_screenshot"]) {
+  for (const name of ["computer", "computer.screenshot", "computer_use.screenshot", "cua_repl.js", "mcp__cua_repl__js", "mcp__unified_computer_use__screenshot"]) {
     assert.equal(isComputerTool(name), true, name);
   }
-  for (const name of ["Read", "image_gen", "mcp__grok_it__grok_image_generate", "mcp__node_repl__js", "not_computer.screenshot"]) {
+  const browserTools = ["playwright.browser_take_screenshot", "mcp__playwright__browser_take_screenshot", "mcp__claude_in_chrome__computer", "claude_in_chrome.computer", "mcp__navi__browser_action"];
+  for (const name of ["Read", "image_gen", "mcp__grok_it__grok_image_generate", "mcp__node_repl__js", "not_computer.screenshot", ...browserTools]) {
     assert.equal(isComputerTool(name), false, name);
   }
   const seen = imageStore();
@@ -33,6 +34,11 @@ try {
   assert.deepEqual(toolImageEvents({ content }, seen, "Read"), []);
   const plain = toolImageEvents({ content }, imageStore(), "Read")[0]!;
   assert.equal(plain.computer, undefined);
+  for (const name of browserTools) {
+    const image = toolImageEvents({ content }, imageStore(), name)[0]!;
+    assert.ok(image.path);
+    assert.equal(image.computer, undefined, name);
+  }
 
   const tracker = new ComputerToolImages();
   tracker.call({ id: "computer", name: "screenshot", toolset_name: "computer" });
@@ -49,6 +55,10 @@ try {
   assert.equal(computerUseFrame("other"), null);
   appendSessionTrace("task", "claude-session", turn, plain, turn);
   assert.equal(computerUseFrame("task")?.sessionId, "codex-session");
+  for (const name of browserTools) {
+    appendSessionTrace("task", "browser-session", turn, { ...first, computer: name }, turn);
+    assert.equal(computerUseFrame("task")?.sessionId, "codex-session", name);
+  }
   const later = "2026-11-21T01:00:01.000Z";
   const child: AgentEvent = { kind: "tool", name: "child", nativeWork: { type: "activity", id: "child", event: claude } };
   appendSessionTrace("task", "claude-session", turn, child, later);
@@ -64,6 +74,10 @@ try {
   const persistedPath = join(root, "runs", "task", "computer-preview.json");
   writeFileSync(persistedPath, JSON.stringify(persistedFrame));
   assert.deepEqual(computerUseFrame("task"), persistedFrame);
+  for (const name of browserTools) {
+    writeFileSync(persistedPath, JSON.stringify({ ...persistedFrame, tool: name }));
+    assert.equal(computerUseFrame("task"), null, name);
+  }
   for (const field of ["path", "tool", "at", "sessionId", "turnStartedAt"] as const) {
     for (const invalid of ["", "   ", null, 123, true, {}, []]) {
       writeFileSync(persistedPath, JSON.stringify({ ...persistedFrame, [field]: invalid }));
@@ -72,7 +86,7 @@ try {
   }
   assert.deepEqual(parseBrowserAction({ action: "viewport", mode: "responsive", width: 640, height: 800 }), { action: "viewport", mode: "responsive", width: 640, height: 800 });
   assert.throws(() => parseBrowserAction({ action: "viewport", mode: "invalid", width: 640, height: 800 }), /显示模式/);
-  console.log("PASS computer preview: Codex/Claude correlation, screenshot reuse, dynamic images, validated persisted frames, child activity, task isolation and deletion");
+  console.log("PASS computer preview: computer-only classification, browser and legacy frame exclusion, Codex/Claude correlation, screenshot reuse, dynamic images, validated persisted frames, child activity, task isolation and deletion");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

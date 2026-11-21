@@ -30,7 +30,7 @@ export function BrowserInspector({ runtime }: { runtime: TaskRuntime }) {
 }
 
 /** 画面轮询自己的失败（加载不出画面）只在这一格显示，下一帧取到就消失。 */
-export function useBrowserFrame(taskId: string, state: TaskBrowserState) {
+function useBrowserFrame(taskId: string, state: TaskBrowserState) {
   const [frame, setFrame] = useState("");
   const [error, setError] = useState("");
   const objectUrl = useRef("");
