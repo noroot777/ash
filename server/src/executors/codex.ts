@@ -406,7 +406,7 @@ async function* codexStreamEvents(
         if (writes) push(writes);
       }
       else if (it.type === "mcp_tool_call") {
-        for (const image of toolImageEvents(it.result, seenImages, `${it.server}.${it.tool}`)) push(image);
+        for (const image of toolImageEvents(it.result, seenImages, `${it.server}.${it.tool}`, false, it.arguments)) push(image);
       }
       else if (it.type === "image_generation_call") {
         for (const path of persistToolResultImages(it.result, seenImages, { allowBareBase64: true })) push({ kind: "attachment", path });

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>全部状态圆点 · 4 / 5 / 6 / 7px 并排对照</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      color-scheme: light;
+      --page: lch(97.94% 0.5 282); --panel: #fff; --raised: lch(96.914% 0 282);
+      --ink: lch(9.794% 0 282); --muted: lch(39.176% 1.25 282); --line: lch(90.55% 0 282);
+      --accent: #5e6ad2; --amber: #b57b00; --red: #d93d4c; --green: #168466;
+      --faint: lch(64.64% 1.25 282); --micro: #858aa8;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      color: var(--ink); background: var(--page);
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: lch(9.5% 2 282); --panel: lch(12.5% 2 282); --raised: lch(15.5% 2 282);
+      --ink: lch(92% 1 282); --muted: lch(67% 3 282); --line: lch(20.5% 2 282);
+      --accent: #7480e0; --amber: #dea43c; --red: #ef6b7b; --green: #3fba8c;
+      --faint: lch(48% 3 282); --micro: #a0a6c5;
+    }
+    body { margin: 0; padding: 34px 24px; }
+    main { max-width: 1480px; margin: auto; }
+    h1 { font-size: 26px; letter-spacing: -.6px; margin: 0 0 10px; }
+    h2 { font-size: 14px; margin: 0; }
+    p { font-size: 13px; line-height: 1.8; color: var(--muted); }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 12px; }
+    button, a { color: inherit; font: inherit; }
+    button { cursor: pointer; border: 1px solid var(--line); background: var(--panel); padding: 8px 12px; border-radius: 7px; font-size: 12px; }
+    button:hover { background: var(--raised); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .hint { min-height: 23px; margin: 0 0 20px; font-size: 12px; }
+    .comparison-scroll { overflow-x: auto; padding-bottom: 8px; }
+    .layout { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 1160px; gap: 16px; align-items: start; }
+    .panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+    .palette-panel { margin-top: 22px; }
+    summary { cursor: pointer; font-size: 13px; padding: 15px 18px; }
+    summary:hover { background: var(--raised); }
+    .panel-heading { padding: 17px 18px; border-bottom: 1px solid var(--line); }
+    .panel-heading p { font-size: 12px; margin: 6px 0 0; }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+    th { color: var(--muted); font-size: 11px; font-weight: 400; background: var(--raised); }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); }
+    th:first-child, td:first-child { padding-left: 18px; }
+    tbody tr:last-child td { border-bottom: 0; }
+    td:first-child { min-width: 140px; }
+    td:not(:first-child) { white-space: nowrap; }
+    td.motion { font-size: 11px; color: var(--muted); }
+    .sample { display: grid; place-items: center; width: 32px; height: 26px; }
+    .zoom { transform: scale(4); display: grid; place-items: center; }
+    .dot { display: block; width: var(--dot-size); height: var(--dot-size); border-radius: 50%; flex-shrink: 0; }
+    .run { background: var(--accent); animation: pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
+    .hold { background: var(--accent); }
+    .wait { background: var(--amber); }
+    .bad { background: var(--red); }
+    .new { background: var(--green); }
+    .queue { box-shadow: inset 0 0 0 var(--ring-width) var(--faint); }
+    .stalled { background: color-mix(in oklab, var(--red) 16%, transparent); box-shadow: inset 0 0 0 var(--ring-width) var(--red); }
+    .open { background: color-mix(in oklab, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 var(--ring-width) var(--accent); }
+    .micro { background: var(--micro); }
+    .candidate { background: var(--raised); }
+    .color-code { font: 10px ui-monospace, monospace; color: var(--muted); }
+    @keyframes pulse { 0%, 100% { opacity: .68; transform: scale(.84); } 50% { opacity: 1; transform: scale(1.18); } }
+    :root[data-motion="reduce"] .run { animation: none; }
+    @media (prefers-reduced-motion: reduce) { :root:not([data-motion="full"]) .run { animation: none; } }
+    .tasks { padding: 9px; background: var(--raised); }
+    .task { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 6px; font-size: 13px; }
+    .task-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .leading { display: grid; place-items: center; width: 22px; flex: 0 0 22px; }
+    .task small { margin-left: auto; color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .aside-note { min-height: 72px; margin: 0; padding: 14px 18px; border-top: 1px solid var(--line); font-size: 12px; }
+    .notes { margin-top: 18px; font-size: 12px; }
+    .notes a { text-underline-offset: 3px; }
+    @media (max-width: 540px) { body { padding: 22px 12px; } h1 { font-size: 23px; } th, td { padding: 12px 7px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>4 / 5 / 6 / 7px，一排看清。</h1>
+    <p>四列是同一批任务，所有状态统一使用该列的尺寸，包括已选的蓝灰待验收实心点。颜色、呼吸节奏、行高、标题间距都保持一致；窄窗口可以横向滚动。</p>
+    <div class="toolbar">
+      <button id="theme" type="button" aria-pressed="false">切换深色</button>
+      <button id="motion" type="button" aria-pressed="false">关闭呼吸动效</button>
+      <button id="density" type="button" aria-pressed="false">看更多待验收任务</button>
+    </div>
+    <p class="hint" id="hint" role="status"></p>
+    <div class="comparison-scroll" tabindex="0" role="region" aria-label="4、5、6、7px 四列尺寸对照，可横向滚动">
+      <div class="layout" id="comparisons"></div>
+    </div>
+    <details class="panel palette-panel">
+      <summary>展开完整图例：每种状态的 4 / 5 / 6 / 7px，以及各自 4 倍放大</summary>
+      <div class="table-scroll">
+        <table>
+          <thead><tr id="palette-heading"></tr></thead>
+          <tbody id="palette"></tbody>
+        </table>
+      </div>
+    </details>
+    <p class="notes">尺寸均为真实 CSS 像素；呼吸点标的是基础直径，动画缩放比例不变。空心环按尺寸适配环线，具体粗细见各列底部。<br>待验收都用已选的蓝灰实心，旧圆环仅保留在展开图例中作参照。仅更新独立 demo，正式界面和真实任务未修改。<a href="index.html">返回五种圆点方案</a></p>
+  </main>
+  <script>
+    const sizes = [{ diameter: 4, ring: 1 }, { diameter: 5, ring: 1 }, { diameter: 6, ring: 1.25 }, { diameter: 7, ring: 1.5 }];
+    const statuses = [
+      { name: "运行中 / 审查中", mark: "run", color: "accent", tone: "靛蓝", motion: "呼吸" },
+      { name: "等后台 / 跑验收检查", mark: "hold", color: "accent", tone: "靛蓝", motion: "静止" },
+      { name: "等答复 / 裁定 / 暂停", mark: "wait", color: "amber", tone: "琥珀", motion: "静止" },
+      { name: "失败 / 验证没过", mark: "bad", color: "red", tone: "红", motion: "静止" },
+      { name: "已验收，有未读动态", mark: "new", color: "green", tone: "绿", motion: "静止" },
+      { name: "排队 / 等前置 / 等开工", mark: "queue", color: "faint", tone: "灰", motion: "静止" },
+      { name: "卡在模型上游", mark: "stalled", color: "red", tone: "红环", motion: "静止" },
+      { name: "待验收 · 旧圆环参照", mark: "open", color: "accent", tone: "靛蓝环", motion: "静止" },
+      { name: "尚未开始 / 验收后已读", mark: null, tone: "不画点", motion: "—" },
+      { name: "待验收 · 蓝灰实心", mark: "micro", color: "micro", tone: "蓝灰", motion: "静止" }
+    ];
+    const taskRows = [
+      ["run", "优化任务加载", "运行中"], ["hold", "等待验收检查", "等后台"],
+      ["micro", "排查登录回调", "待验收"], ["micro", "调整详情留白", "待验收"],
+      ["wait", "确认发布配置", "等答复"], ["bad", "修复构建失败", "失败"],
+      ["new", "统一按钮尺寸", "验收后未读"], ["queue", "补齐接口文档", "排队中"],
+      ["stalled", "等待模型输出", "卡在上游"], ["micro", "整理结果提示", "待验收"],
+      ["micro", "修复附件预览", "待验收"], [null, "整理设置入口", "验收后已读"]
+    ];
+    const extraTitles = ["修复侧栏滚动", "优化长标题截断", "调整项目切换", "优化终端连接提示", "补齐空列表占位", "修复搜索焦点", "调整消息时间", "整理任务归档"];
+    const reducedPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let motionOff = reducedPreference.matches;
+    let motionChosen = false;
+    let dense = false;
+    function make(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    }
+    function applySize(node, size) {
+      node.style.setProperty("--dot-size", `${size.diameter}px`);
+      node.style.setProperty("--ring-width", `${size.ring}px`);
+    }
+    function renderComparisons() {
+      document.getElementById("comparisons").replaceChildren(...sizes.map(size => {
+        const panel = make("section", "panel");
+        applySize(panel, size);
+        panel.setAttribute("aria-labelledby", `heading-${size.diameter}`);
+        const header = make("div", "panel-heading");
+        const heading = make("h2", "", `${size.diameter}px · 全部状态`);
+        heading.id = `heading-${size.diameter}`;
+        header.append(heading, make("p", "", `实心点、空心环、待验收统一 ${size.diameter}px。`));
+        const tasks = make("div", "tasks");
+        tasks.id = `tasks-${size.diameter}`;
+        panel.append(header, tasks, make("p", "aside-note", `直径 ${size.diameter}px · 环线 ${size.ring}px。相同的 22px 槽位、32px 行高。`));
+        return panel;
+      }));
+    }
+    function specimen(mark, size, zoomed = false) {
+      const stage = make("span", "sample");
+      applySize(stage, size);
+      stage.setAttribute("aria-hidden", "true");
+      if (mark) {
+        const dot = make("span", `dot ${mark}`);
+        if (zoomed) { const zoom = make("span", "zoom"); zoom.append(dot); stage.append(zoom); }
+        else stage.append(dot);
+      }
+      return stage;
+    }
+    function renderPalette() {
+      const colors = getComputedStyle(document.documentElement);
+      const headings = ["状态", ...sizes.map(size => `${size.diameter}px`), ...sizes.map(size => `${size.diameter}px 放大`), "颜色", "动效"];
+      document.getElementById("palette-heading").replaceChildren(...headings.map(text => {
+        const heading = make("th", "", text);
+        heading.scope = "col";
+        return heading;
+      }));
+      document.getElementById("palette").replaceChildren(...statuses.map(status => {
+        const row = make("tr", status.mark === "micro" ? "candidate" : "");
+        row.append(make("td", "", status.name));
+        for (const zoomed of [false, true]) {
+          for (const size of sizes) {
+            const cell = make("td"); cell.append(specimen(status.mark, size, zoomed)); row.append(cell);
+          }
+        }
+        const color = make("td", "", status.tone);
+        if (status.color) color.append(make("div", "color-code", colors.getPropertyValue(`--${status.color}`).trim()));
+        row.append(color, make("td", "motion", status.mark === "run" && motionOff ? "已关闭呼吸" : status.motion));
+        return row;
+      }));
+    }
+    function updateMotion() {
+      document.documentElement.dataset.motion = motionOff ? "reduce" : "full";
+      document.getElementById("motion").textContent = motionOff ? "开启呼吸动效" : "关闭呼吸动效";
+      document.getElementById("motion").setAttribute("aria-pressed", String(motionOff));
+      document.getElementById("hint").textContent = motionOff
+        ? "呼吸已关闭：运行中与等后台都静止。可以点击「开启呼吸动效」看实际节奏。"
+        : "只有「运行中 / 审查中」在呼吸，周期 1.35 秒；其他点保持静止。";
+      renderPalette();
+    }
+    function renderTasks() {
+      const rows = dense ? [...taskRows, ...extraTitles.map(title => ["micro", title, "待验收"])] : taskRows;
+      for (const size of sizes) {
+        document.getElementById(`tasks-${size.diameter}`).replaceChildren(...rows.map(([mark, title, label]) => {
+          const row = make("div", "task");
+          const leading = make("span", "leading");
+          if (mark) leading.append(make("span", `dot ${mark}`));
+          leading.setAttribute("aria-hidden", "true");
+          row.append(leading, make("span", "task-title", title), make("small", "", label));
+          return row;
+        }));
+      }
+    }
+    document.getElementById("theme").onclick = () => {
+      const dark = document.documentElement.dataset.theme !== "dark";
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+      document.getElementById("theme").textContent = dark ? "切换浅色" : "切换深色";
+      document.getElementById("theme").setAttribute("aria-pressed", String(dark));
+      renderPalette();
+    };
+    document.getElementById("motion").onclick = () => { motionChosen = true; motionOff = !motionOff; updateMotion(); };
+    document.getElementById("density").onclick = () => {
+      dense = !dense;
+      document.getElementById("density").textContent = dense ? "回到短列表" : "看更多待验收任务";
+      document.getElementById("density").setAttribute("aria-pressed", String(dense));
+      renderTasks();
+    };
+    reducedPreference.addEventListener("change", event => { if (!motionChosen) { motionOff = event.matches; updateMotion(); } });
+    renderComparisons();
+    renderTasks();
+    updateMotion();
+  </script>
+</body>
+</html>

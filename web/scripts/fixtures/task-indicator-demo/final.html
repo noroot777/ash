@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>任务状态圆点 · 6px 定稿</title>
+  <style>
+    body { margin: 0; padding: 32px 24px; background: var(--canvas); color: var(--ink); }
+    .dot-final { max-width: 1080px; margin: auto; }
+    .dot-final h1 { font-size: 24px; font-weight: 600; margin-bottom: 12px; }
+    .dot-final p { color: var(--muted); font-size: 13px; line-height: 1.8; }
+    .dot-final-controls { display: flex; gap: 8px; margin: 20px 0; }
+    .dot-final-controls button { cursor: pointer; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: 12px; }
+    .dot-final :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .dot-final-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+    .dot-final table { width: 100%; min-width: 700px; border-collapse: collapse; text-align: left; font-size: 13px; }
+    .dot-final th { color: var(--muted); font-weight: 400; background: var(--raised); }
+    .dot-final th, .dot-final td { height: 46px; padding: 10px 18px; border-bottom: 1px solid var(--line); }
+    .dot-final tr:last-child td { border-bottom: 0; }
+    .dot-final-sample { display: flex; align-items: center; gap: 12px; }
+    .dot-final-slot { display: grid; place-items: center; width: 22px; height: 22px; }
+    .dot-final-meta { font-size: 11px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main class="dot-final">
+    <h1>已定稿：微实心，全部 6px。</h1>
+    <p>直接使用正式 TaskStatusDot / StatusChip 组件和全局样式，不是复制 demo 的圆点。待验收为蓝灰实心，其余颜色、呼吸和验收含义不变。</p>
+    <div class="dot-final-controls">
+      <button id="theme" type="button" aria-pressed="false">切换深色</button>
+      <button id="motion" type="button" aria-pressed="false">关闭呼吸动效</button>
+    </div>
+    <p id="motion-state" role="status"></p>
+    <div id="root"></div>
+    <p>普通、小号、团队及状态标签的圆点基础直径均为 6px；运行中的呼吸缩放保持原节奏。未开始在侧栏不画点，团队仍显示虚线图标。</p>
+  </main>
+  <script type="module">
+    import React from "react";
+    import { createRoot } from "react-dom/client";
+    import { TaskStatusDot } from "/src/components/TaskStatusDot.tsx";
+    import { StatusChip } from "/src/components/ui.tsx";
+    import "/src/styles/global.css";
+
+    const statuses = [
+      ["active", "运行中 / 审查中"], ["working", "等后台完成"], ["attention", "需要人工输入"],
+      ["error", "失败"], ["success", "验收后有未读动态"], ["queued", "排队中"],
+      ["waiting", "等着开工"], ["stalled", "卡在模型上游"], ["unaccepted", "待验收 · 蓝灰实心"],
+      ["pending", "尚未开始"]
+    ];
+    const surfaces = [["workspace", false], ["workspace", true], ["team", false], ["team", true]];
+    const element = React.createElement;
+    const header = element("thead", null, element("tr", null,
+      ...["状态", "侧栏", "侧栏原小号", "团队 / 任务头", "团队原小号"].map(label => element("th", { key: label, scope: "col" }, label))));
+    const rows = statuses.map(([indicator, label]) => element("tr", { key: indicator, "data-indicator": indicator },
+      element("td", null, label),
+      ...surfaces.map(([surface, small]) => element("td", { key: `${surface}-${small}`, "data-surface": surface, "data-small": small },
+        element("div", { className: "dot-final-sample" }, element("span", { className: "dot-final-slot" },
+          element(TaskStatusDot, { indicator, surface, small })), element("span", { className: "dot-final-meta" }, "6px"))))));
+    const chips = ["neutral", "green", "amber", "red", "accent", "cyan"].map(tone => element(StatusChip, { key: tone, tone }, tone));
+    createRoot(document.getElementById("root")).render(element(React.Fragment, null,
+      element("div", { className: "dot-final-scroll" }, element("table", null, header, element("tbody", null, ...rows))),
+      element("div", { className: "dot-final-controls", "aria-label": "通用状态标签" }, ...chips)));
+    const preference = matchMedia("(prefers-reduced-motion: reduce)");
+    let motionOff = preference.matches;
+    let motionChosen = false;
+    function updateMotion() {
+      document.documentElement.dataset.motion = motionOff ? "reduce" : "full";
+      document.getElementById("motion").textContent = motionOff ? "开启呼吸动效" : "关闭呼吸动效";
+      document.getElementById("motion").setAttribute("aria-pressed", String(motionOff));
+      document.getElementById("motion-state").textContent = motionOff ? "呼吸已关闭，所有圆点静止。" : "运行中为呼吸点，其余静止。待验收点不会因查看而消失。";
+    }
+    document.getElementById("theme").onclick = () => {
+      const dark = document.documentElement.dataset.theme !== "dark";
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+      document.getElementById("theme").textContent = dark ? "切换浅色" : "切换深色";
+      document.getElementById("theme").setAttribute("aria-pressed", String(dark));
+    };
+    document.getElementById("motion").onclick = () => { motionChosen = true; motionOff = !motionOff; updateMotion(); };
+    preference.addEventListener("change", event => { if (!motionChosen) { motionOff = event.matches; updateMotion(); } });
+    updateMotion();
+  </script>
+</body>
+</html>

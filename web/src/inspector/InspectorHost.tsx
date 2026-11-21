@@ -377,7 +377,7 @@ function InspectorHostState<Context>({
   return (
     <div className="inspector-layout">
       <div className="inspector-layout__main">
-        {children({ visible: panelVisible, activeTabId: panelVisible ? activeDescriptor?.id ?? null : null, toggle, openTab, toggleButton })}
+        {children({ visible: panelVisible, toggle, openTab, toggleButton })}
       </div>
       {/* 有保活的格时整栏收起也不卸，只藏：卸掉 aside 就把里面那份活现场一起卸了。 */}
       {activeDescriptor && (panelVisible || keptDescriptors.length > 0) && (

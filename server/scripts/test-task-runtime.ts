@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { NAVI_HEADERS } from "@navi/shared/http-headers";
-import type { BrowserObservation } from "@navi/shared/task-runtime";
+import type { BrowserObservation, ComputerUseTarget } from "@navi/shared/task-runtime";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-task-runtime-"));
@@ -25,6 +25,7 @@ const { taskBrowserState, closeTaskBrowser } = await import("../src/task-browser
 const { browserFile } = await import("../src/task-browser-store.js");
 const { startDevelopmentService } = await import("../src/task-runtime-service.js");
 const { appendSessionTrace } = await import("../src/transcript.js");
+const { markTurnActive, clearTurnActive } = await import("../src/session-turn-registry.js");
 const screenshots = process.env.NAVI_RUNTIME_SCREENSHOTS || join(root, "screenshots");
 mkdirSync(screenshots, { recursive: true });
 const repo = join(root, "repo");
@@ -49,7 +50,13 @@ writeFileSync(join(repo, "service.cjs"), "throw Error('WRONG WORKSPACE')");
 writeFileSync(join(workspace, "service.cjs"), `const http=require('node:http'); const html=${JSON.stringify(html)}; const server=http.createServer((req,res)=>{res.setHeader('Content-Type','text/html; charset=utf-8');res.end(html)});server.listen(Number(process.env.PORT),'127.0.0.1',()=>console.log('http://127.0.0.1:'+server.address().port+'/'));`);
 const app = new Hono();
 const api = new Hono();
-mountTaskRuntimeRoutes(api); mountPreviewRoutes(api); mountFreePreviewRoutes(api);
+const activations: ComputerUseTarget[] = [];
+let activationFailure = "";
+mountTaskRuntimeRoutes(api, async (target) => {
+  if (activationFailure) throw new Error(activationFailure);
+  activations.push(target);
+});
+mountPreviewRoutes(api); mountFreePreviewRoutes(api);
 app.route("/api", api);
 const agentHeaders = { [NAVI_HEADERS.sourceTaskId]: "runtime", [NAVI_HEADERS.turnToken]: "turn-runtime", [NAVI_HEADERS.directionToken]: "direction-runtime" };
 const request = (suffix: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) => app.request(`/api/tasks/runtime/${suffix}`, {
@@ -61,6 +68,13 @@ async function okJson(response: Response) {
   return value;
 }
 const action = async (body: unknown, agent = true): Promise<BrowserObservation> => okJson(await request("runtime/browser", "POST", body, agent ? agentHeaders : {}));
+const computerTarget = { application: "/System/Applications/Messages.app", name: "信息" };
+let computerTurn = stamp;
+const computerClick = () => ({ sessionId: "computer-session", turnStartedAt: computerTurn, application: computerTarget.application });
+const showComputer = () => {
+  assert.equal(markTurnActive({ taskId: "runtime", sessionId: "computer-session", startedAt: computerTurn }), true);
+  appendSessionTrace("runtime", "computer-session", computerTurn, { kind: "attachment", path: "/data/uploads/runtime-computer.png", computer: "cua_repl.js", computerTarget });
+};
 let uiBrowser: any;
 let web: any;
 try {
@@ -156,13 +170,56 @@ try {
   assert.equal((await request("runtime/browser", "POST", { action: "navigate", id: browserId, path: "http://127.0.0.1:4317/" }, agentHeaders)).status, 409);
   observed = await action({ action: "snapshot", id: browserId });
   assert.equal(observed.state.error, null);
+  appendSessionTrace("runtime", "computer-session", computerTurn, { kind: "attachment", path: "/data/uploads/runtime-computer.png", computer: "cua_repl.js", computerTarget });
+  assert.equal((await okJson(await request("runtime"))).computer, null);
+  assert.equal((await request("runtime/computer/activate", "POST", computerClick())).status, 409);
+  showComputer();
+  assert.deepEqual((await okJson(await request("runtime"))).computer.target, computerTarget);
+  assert.equal((await request("runtime/computer/activate", "POST", computerClick(), agentHeaders)).status, 403);
+  assert.equal((await request("runtime/computer/activate", "POST", computerClick(), { host: "remote.example" })).status, 403);
+  assert.equal((await request("runtime/computer/activate", "POST", computerClick(), { "x-forwarded-for": "127.0.0.1" })).status, 403);
+  for (const mismatch of [{ application: "com.apple.Notes" }, { sessionId: "other-session" }, { turnStartedAt: "old-turn" }]) {
+    assert.equal((await request("runtime/computer/activate", "POST", { ...computerClick(), ...mismatch })).status, 409);
+  }
+  assert.equal(activations.length, 0);
+  assert.deepEqual(await okJson(await request("runtime/computer/activate", "POST", computerClick())), { activated: true });
+  assert.deepEqual(activations, [computerTarget]);
+  const endedClick = computerClick();
+  clearTurnActive("computer-session", computerTurn);
+  assert.equal((await okJson(await request("runtime"))).computer, null);
+  assert.equal((await request("runtime/computer/activate", "POST", endedClick)).status, 409);
+  computerTurn = new Date(Date.parse(computerTurn) + 1).toISOString();
+  markTurnActive({ taskId: "runtime", sessionId: "computer-session", startedAt: computerTurn });
+  assert.equal((await okJson(await request("runtime"))).computer, null);
+  showComputer();
+  assert.equal((await request("runtime/computer/activate", "POST", endedClick)).status, 409);
+  assert.equal(activations.length, 1);
   if (process.env.NAVI_RUNTIME_SERVER_ONLY !== "1") {
     await action({ action: "close", id: browserId });
-    appendSessionTrace("runtime", "computer-session", stamp, { kind: "attachment", path: "/data/uploads/runtime-computer.png", computer: "cua_repl.js" });
     const { launchChrome, startWebServer } = await import("../../web/scripts/dom-stage.mjs");
     web = await startWebServer();
     uiBrowser = await launchChrome();
     const page = await uiBrowser.newPage({ viewport: { width: 1600, height: 1000 } });
+    await page.addInitScript({ content: `(() => {
+      const host = window;
+      host.previewMessages = [];
+      const timers = new Map();
+      Object.defineProperty(window, "webkit", { configurable: true, value: { messageHandlers: { naviComputerPreview: {
+        postMessage: (message) => {
+          host.previewMessages.push(message);
+          if (message.action === "stop") { clearInterval(timers.get(message.id)); timers.delete(message.id); }
+          if (message.action !== "start") return;
+          const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 400;
+          const context = canvas.getContext("2d");
+          let tick = 0;
+          timers.set(message.id, window.setInterval(() => {
+            context.fillStyle = "#17233b"; context.fillRect(0, 0, 640, 400);
+            context.fillStyle = "#6fe1bd"; context.fillRect((tick++ * 13) % 560, 150, 80, 80);
+            window.dispatchEvent(new CustomEvent("navi:computer-preview", { detail: { id: message.id, state: "frame", image: canvas.toDataURL("image/jpeg") } }));
+          }, 80));
+        },
+      } } } });
+    })();` });
     const pageErrors: string[] = [];
     page.on("pageerror", (error: Error) => pageErrors.push(error.message));
     // 扣住「runtime」任务的下一次状态查询，放行前切到别的任务：模拟上一个任务迟到的响应。
@@ -214,34 +271,53 @@ try {
     await tab("浏览器").waitFor();
     assert.equal(await pane.count(), 0);
     const computer = page.getByRole("complementary", { name: "电脑操作" });
-    const computerImage = computer.getByRole("button", { name: "电脑操作的最近截图" });
+    const computerImage = computer.getByRole("button", { name: "切到正在操作的应用" });
     await computerImage.waitFor();
+    const liveImage = computer.getByRole("img", { name: "电脑操作实时画面" });
+    await liveImage.waitFor().catch(async (error: unknown) => {
+      console.error("Computer preview diagnostics", { pageErrors, browser: await page.evaluate(() => ({
+        messages: (window as any).previewMessages, preview: document.querySelector('.runtime-activity-preview')?.outerHTML,
+      })) });
+      throw error;
+    });
+    const firstLiveSource = await liveImage.getAttribute("src");
+    await page.waitForFunction((first: string) => document.querySelector('.runtime-computer-target img')?.getAttribute("src") !== first, firstLiveSource);
     await page.waitForFunction(() => document.querySelector<HTMLImageElement>('.runtime-activity-preview[aria-label="电脑操作"] img')!.naturalWidth > 0);
     await page.screenshot({ path: join(screenshots, "computer-use-preview.png") });
     await computer.getByRole("button", { name: "收起操作预览" }).click();
+    assert.equal(await page.evaluate(() => (window as any).previewMessages.at(-1).action), "stop");
     await page.reload();
     await computer.getByRole("button", { name: "展开操作预览" }).waitFor();
     assert.equal(await computerImage.count(), 0);
     await computer.getByRole("button", { name: "展开操作预览" }).click();
+    activationFailure = "目标应用暂时无法切换";
     await computerImage.click();
-    await page.getByRole("dialog").waitFor();
-    await page.keyboard.press("Escape");
-    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    await computer.getByRole("alert").getByText(activationFailure).waitFor();
+    activationFailure = "";
+    const beforeClick = activations.length;
+    await computerImage.click();
+    await computer.getByRole("alert").waitFor({ state: "hidden" });
+    assert.equal(activations.length, beforeClick + 1);
+    assert.deepEqual(activations.at(-1), computerTarget);
+    assert.equal(await page.getByRole("dialog").count(), 0);
     await tab("服务").click();
     await page.getByRole("region", { name: "服务日志" }).getByText(/node service.cjs/).waitFor();
     assert.ok(await page.getByRole("link", { name: "打开", exact: true }).count());
     await page.screenshot({ path: join(screenshots, "runtime-service-inspector.png") });
     await tab("信息").click();
+    clearTurnActive("computer-session", computerTurn);
+    await computer.waitFor({ state: "hidden" });
+    await page.reload();
+    await tab("信息").waitFor();
+    assert.equal(await computer.count(), 0);
+    await page.screenshot({ path: join(screenshots, "computer-use-finished.png") });
     observed = await action({ action: "open" });
     browserId = observed.state.id;
     const mini = page.getByRole("complementary", { name: "浏览器操作" });
-    await mini.getByRole("img").waitFor();
-    assert.equal(await pane.count(), 0);
-    assert.ok((await mini.boundingBox())!.width <= 304);
-    await page.screenshot({ path: join(screenshots, "shared-browser-mini.png") });
-    await mini.getByRole("button", { name: "展开共享浏览器" }).click();
     await page.getByRole("button", { name: "接管", exact: true }).waitFor();
     await pane.getByRole("img").waitFor();
+    assert.equal(await mini.count(), 0);
+    assert.equal(await computer.count(), 0);
     await page.waitForFunction(() => {
       const viewport = document.querySelector<HTMLElement>(".task-browser-viewport")!;
       const image = viewport.querySelector("img")!;
@@ -258,6 +334,13 @@ try {
       const viewport = document.querySelector<HTMLElement>(".task-browser-viewport")!;
       return viewport.querySelector("img")!.naturalWidth === viewport.clientWidth;
     });
+    computerTurn = new Date(Date.parse(computerTurn) + 1).toISOString();
+    showComputer();
+    await computerImage.waitFor();
+    assert.equal(await mini.count(), 0);
+    await page.screenshot({ path: join(screenshots, "computer-use-with-browser.png") });
+    clearTurnActive("computer-session", computerTurn);
+    await computer.waitFor({ state: "hidden" });
     const share = await page.evaluate(() => document.querySelector(".inspector-host")!.getBoundingClientRect().width / window.innerWidth);
     assert.ok(share > 0.45 && share < 0.55, `浏览器那一格约占一半宽，实际 ${share}`);
     assert.equal(taskBrowserState("runtime")?.control, "agent");
@@ -284,6 +367,8 @@ try {
     await page.reload();
     await tab("浏览器").waitFor();
     assert.equal(await pane.count(), 0);
+    assert.equal(await page.locator(".runtime-activity-preview").count(), 0);
+    await page.screenshot({ path: join(screenshots, "shared-browser-no-preview.png") });
     await tab("浏览器").click();
     await pane.getByRole("img").waitFor();
     await page.reload();

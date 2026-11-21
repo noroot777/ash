@@ -6,24 +6,18 @@
 
    读法先看颜色:琥珀 = 轮到你说话(等答复、等裁定、停在检查点);主色 = 机器的事,不用你管(在跑
    是会跳的实心点,等哨兵 / 验收前置命令跑完是不跳的实心点);红 = 出事了(失败实心、卡在上游
-   红环);做完没验收靛蓝环;验收过没看绿;还没轮到它灰环。
+   红环);做完没验收蓝灰实心点;验收过没看绿;还没轮到它灰环。
    「要不要我动手」只靠颜色分,不靠动不动 —— 从前等哨兵是会跳的琥珀点,跟等你说话的琥珀点
    在列表里一眼看去是同一颗。减少动效时会跳的那颗也静止。
    验收过也看过的什么都不画,槽位留着,标题照样对齐。 */
 .workspace-status-dot {
   box-sizing: border-box;
   display: block;
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
+  width: var(--status-dot-size);
+  height: var(--status-dot-size);
+  flex: 0 0 var(--status-dot-size);
   border-radius: var(--r-full);
   font-style: normal;
-}
-
-.workspace-status-dot--small {
-  width: 5px;
-  height: 5px;
-  flex-basis: 5px;
 }
 
 .workspace-status-dot--run {
@@ -35,7 +29,7 @@
 .workspace-status-dot--bad { background: var(--red); }
 .workspace-status-dot--new { background: var(--green); }
 /* 排在队里、还没轮到:一圈灰,不抢眼 */
-.workspace-status-dot--queue { box-shadow: inset 0 0 0 1.5px var(--faint); }
+.workspace-status-dot--queue { box-shadow: inset 0 0 0 var(--status-dot-ring-width) var(--faint); }
 /* 「等一件会自己回来的事」（挂着哨兵、验收前置命令正在跑）：跟在跑同一个主色 —— 都是机器的事；
    不跳，因为此刻没在算，只是在等。 */
 .workspace-status-dot--hold { background: var(--accent); }
@@ -43,20 +37,16 @@
    失败也分得开，那一档是已经收场了。 */
 .workspace-status-dot--stalled {
   background: color-mix(in oklab, var(--red) 16%, transparent);
-  box-shadow: inset 0 0 0 1.5px var(--red);
+  box-shadow: inset 0 0 0 var(--status-dot-ring-width) var(--red);
 }
-/* 未验收 = 干完了但还没盖章：靛蓝环，读没读过都在。 */
+/* 未验收 = 干完了但还没盖章：蓝灰实心点，读没读过都在。 */
 .workspace-status-dot--open {
-  background: color-mix(in oklab, var(--accent) 16%, transparent);
-  box-shadow: inset 0 0 0 1.5px var(--accent);
+  background: var(--task-unaccepted);
 }
-.workspace-status-dot--small.workspace-status-dot--queue { box-shadow: inset 0 0 0 1px var(--faint); }
-.workspace-status-dot--small.workspace-status-dot--stalled { box-shadow: inset 0 0 0 1px var(--red); }
-.workspace-status-dot--small.workspace-status-dot--open { box-shadow: inset 0 0 0 1px var(--accent); }
 
 /* 父任务行尾、右侧「子任务」折叠键上那颗子任务图标（components/DispatchGlyph）：说名下最该被看见的
    那一条，读法跟圆点一样 —— 名下在动（在跑、等哨兵、排队……都是机器的事）主色、会跳；轮到你琥珀、
-   出事了红，都不跳；做完没验收的主色、不跳（同那颗靛蓝环）；都验收了留灰（不加类，跟着数字的颜色）。 */
+   出事了红，都不跳；做完没验收的主色、不跳；都验收了留灰（不加类，跟着数字的颜色）。 */
 .dispatch-glyph { flex: 0 0 auto; transform-origin: center; }
 .dispatch-glyph.is-busy {
   color: var(--accent);
@@ -84,22 +74,19 @@
   :root:not([data-motion="full"]) :is(.workspace-status-dot--run, .team-status-dot--active, .dispatch-glyph.is-busy) { animation: none; }
 }
 
-.team-status-dot { display: inline-block; box-sizing: border-box; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; font-style: normal; }
+.team-status-dot { display: inline-block; box-sizing: border-box; width: var(--status-dot-size); height: var(--status-dot-size); flex: 0 0 var(--status-dot-size); border-radius: 50%; font-style: normal; }
 .team-status-dot--pending { border: 1px dashed var(--muted); background: transparent; }
 .team-status-dot--active { background: var(--accent); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
-.team-status-dot--queued, .team-status-dot--waiting { box-shadow: inset 0 0 0 1.5px var(--faint); }
+.team-status-dot--queued, .team-status-dot--waiting { box-shadow: inset 0 0 0 var(--status-dot-ring-width) var(--faint); }
 .team-status-dot--attention { background: var(--amber); }
 /* 同 .workspace-status-dot--hold：黄=等你说话，不跳的主色=等一件会自己回来的事。 */
 .team-status-dot--working { background: var(--accent); }
 /* 同 .workspace-status-dot--stalled：红环=在干等上游，不跳因为它没在动。 */
-.team-status-dot--stalled { border: 1.5px solid var(--red); background: color-mix(in oklab, var(--red) 16%, transparent); }
-.team-status-dot--unaccepted { border: 1.5px solid var(--accent); background: color-mix(in oklab, var(--accent) 16%, transparent); }
+.team-status-dot--stalled { border: var(--status-dot-ring-width) solid var(--red); background: color-mix(in oklab, var(--red) 16%, transparent); }
+.team-status-dot--unaccepted { background: var(--task-unaccepted); }
 .team-status-dot--success { background: var(--green); }
 .team-status-dot--error { background: var(--red); }
 .team-status-dot--pending.task-status-dot--has-icon {
-  width: 10px;
-  height: 10px;
-  flex-basis: 10px;
   border: 0;
   color: var(--muted);
 }
