@@ -36,15 +36,16 @@ export const NO_TOKEN_HINT = [
 ].join("\n");
 
 export class GitHub {
-  constructor(token) {
+  constructor(token, { api = API } = {}) {
     this.token = token;
+    this.api = api;
   }
 
   async call(method, url, { body, headers = {}, allow = [] } = {}) {
-    const response = await fetch(url.startsWith("http") ? url : `${API}${url}`, {
+    const response = await fetch(url.startsWith("http") ? url : `${this.api}${url}`, {
       method,
       headers: {
-        authorization: `Bearer ${this.token}`,
+        ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
         accept: "application/vnd.github+json",
         "x-github-api-version": "2022-11-28",
         ...(body && !(body instanceof Uint8Array) ? { "content-type": "application/json" } : {}),

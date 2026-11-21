@@ -10,12 +10,7 @@
 // 正式发版对着一个本地假 GitHub 跑（两个仓库：o/app 放安装包，o/feed 放 appcast；账号权限和这张 token
 // 真写得了分开模拟）。什么都不公开的几种：账号能写、token 只写得了其中一个或都写不了；清单分支要 PR / 开着
 // 保护；构建提交没推；同名 tag 指着别的提交；app 里没记构建提交；旧格式（只有一个 repo）的配置。都齐了：
-// 草稿 Release → 传 dmg → 下回来核对 → 公开（tag 打在构建提交上）→ appcast 提交进 o/feed、指向 o/app 的
-// 公开附件 → （临时仓库里的）README 链接只提交 README。预检都过、提交 appcast 时才被拒：Release 保持公开
-// （公开不撤回），修好后重跑只补 appcast。沿用一个记着别的提交、排在第二页的旧草稿：找得到，公开时 tag
-// 打在这次的构建提交上。全都发完、只是 README 没提交上：重跑只补 README，不碰 GitHub；补的是旧版的收尾时
-// README 不倒回旧版。README 那一步只动自己写的内容：提交失败且期间别处改过 README 时保留现场，README 已经指向
-// 更新的一版时不倒回去。
+// 草稿 Release → 传 dmg → 下回来核对 → 公开（tag 打在构建提交上）→ appcast 提交进 o/feed、指向 o/app 的包。
 // 改名：改名前的 Ash.app 看的那份 appcast 里换成一条签过名、不带安装包的「仅通知」条目，指向这一版的下载页；
 // 已经指着这一版或更新的就不动（重跑、补旧版收尾都不倒回去）；app 里只记着改名前的 AshSourceCommit 也认；
 // 装包仓库还没从旧名改过来时拦下、什么都不写（别去 --init-repo 建一个撞名的新仓库）。
@@ -24,12 +19,16 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { verifyDownload } from "../desktop/macos/scripts/init-download-page.mjs";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-assert.equal(process.platform, "darwin", "macOS-only regression");
+if (process.platform !== "darwin") {
+  console.log("SKIP: macOS release regression");
+  process.exit(0);
+}
 const root = fileURLToPath(new URL("..", import.meta.url));
 const mac = join(root, "desktop/macos");
 const temporary = mkdtempSync(join(tmpdir(), "ash-macos-release-"));
@@ -95,76 +94,10 @@ function dmgContents(dmg) {
   }
 }
 
-/**
- * README 链接那一步只动自己写的内容：提交失败时文件仍是自己写的那份才还原，期间被别处改过就保留现场；
- * README 已经指向更新的一版时不倒回去（不靠调用方早先读的 appcast）。commitLink 是同步的，放子进程里跑，
- * 好在提交钩子卡着的时候从外面改 README。
- */
-async function readmeOwnership() {
-  const dir = join(temporary, "readme-ownership");
-  mkdirSync(join(dir, "hooks"), { recursive: true });
-  const git = (...args) => {
-    const out = spawnSync("git", args, { cwd: dir, encoding: "utf8", env: cleanEnv });
-    assert.equal(out.status, 0, out.stderr);
-    return out.stdout.trim();
-  };
-  const readme = join(dir, "README.md");
-  const original = "# navi\n<!-- navi-mac-download -->\n**[下载 Navi 0.2.0（20000102.0002）](https://example.invalid/2.dmg)**\n<!-- /navi-mac-download -->\n";
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "test@example.com");
-  git("config", "user.name", "test");
-  writeFileSync(readme, original);
-  git("add", ".");
-  git("commit", "-q", "-m", "init");
-  // 钩子进来后留个记号，等到外面放行（或两秒）再失败。
-  git("config", "core.hooksPath", "hooks");
-  writeFileSync(join(dir, "hooks/pre-commit"), "#!/bin/sh\ntouch .entered\nfor i in $(seq 40); do [ -e .go ] && break; sleep 0.05; done\necho 'hook says no' >&2\nexit 1\n", { mode: 0o755 });
-  const helper = join(mac, "scripts/download-link.mjs");
-  const commitLink = (version, during) => {
-    rmSync(join(dir, ".entered"), { force: true });
-    rmSync(join(dir, ".go"), { force: true });
-    const runner = `import { commitLink } from ${JSON.stringify(helper)};
-console.log(commitLink(${JSON.stringify(readme)}, { url: "https://example.invalid/${version}.dmg", shortVersion: "0.2.0", version: "${version}" }));`;
-    const child = spawn(process.execPath, ["--input-type=module", "-e", runner], { cwd: dir, env: cleanEnv });
-    let out = "";
-    child.stdout.on("data", (data) => (out += data));
-    child.stderr.on("data", (data) => (out += data));
-    return (async () => {
-      if (during) {
-        while (!existsSync(join(dir, ".entered")) && child.exitCode === null) await new Promise((done) => setTimeout(done, 10));
-        during();
-        writeFileSync(join(dir, ".go"), "");
-      }
-      const [status] = await once(child, "close");
-      assert.equal(status, 0, out);
-      return out;
-    })();
-  };
-  const clean = () => assert.equal(git("status", "--porcelain", "--", "README.md"), "");
-
-  let out = await commitLink("20000102.0003");
-  assert.match(out, /提交 .* 失败（hook says no），已还原/);
-  assert.equal(readFileSync(readme, "utf8"), original, "a failed commit of an untouched README restores it");
-  clean();
-
-  out = await commitLink("20000102.0003", () => writeFileSync(readme, readFileSync(readme, "utf8") + "a line someone just saved\n"));
-  assert.match(out, /期间被别处改过，保留现场没还原/);
-  assert.ok(readFileSync(readme, "utf8").includes("a line someone just saved"), "someone else's edit survives the failed commit");
-  assert.ok(readFileSync(readme, "utf8").includes("20000102.0003"));
-  writeFileSync(readme, original);
-  clean();
-
-  out = await commitLink("20000102.0001");
-  assert.match(out, /README 的下载链接留在更新的 20000102\.0002/);
-  assert.equal(readFileSync(readme, "utf8"), original, "an older version never replaces a newer link");
-  assert.equal(git("log", "--format=%s"), "init");
-  console.log("PASS: the README link step only touches what it wrote: a failed commit restores an untouched README, keeps someone else's concurrent edit, and an older version never replaces a newer link");
-}
 
 try {
   await localRehearsal();
   await formalRehearsal();
-  await readmeOwnership();
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
@@ -191,6 +124,7 @@ async function localRehearsal() {
   assert.deepEqual(contents.layout, readFileSync(join(mac, "dmg/DS_Store")), "the checked-in layout");
   assert.equal(contents.binary, "binary 20000101.0001", "the app that was given");
   const signature = appcast().match(/sparkle:edSignature="([^"]+)"/)[1];
+  verifyDownload(readFileSync(first), signature, key.publicKey);
   assert.equal(verify(first, signature), 0, "the dmg verifies against the signature in the appcast");
   assert.equal(verify(join(feed, "appcast.xml")), 0, "the appcast itself is signed");
   assert.match(appcast(), /url="http:\/\/127\.0\.0\.1:1\/Navi-0\.2\.0-20000101\.0001\.dmg"/);
@@ -256,7 +190,7 @@ async function localRehearsal() {
  * 草稿的附件只能经 API 下，公开之后才有公开地址。
  */
 async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules = [], protectedBranch = false, feedPut = 200, drafts = [], newer = 0, missing = [] }) {
-  const state = { calls: [], files: new Map(), releases: [], downloads: new Map(), assets: new Map(), tags: { ...tags }, feedPut };
+  const state = { calls: [], files: new Map(), releases: [], downloads: new Map(), assets: new Map(), tags: { ...tags }, feedPut, channelPut: 200 };
   let base = "";
   let ids = 0;
   for (const draft of drafts) {
@@ -324,8 +258,9 @@ async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules =
       return json(200, all.slice((page - 1) * size, page * size));
     }
     if (req.method === "POST" && rest === "/releases") {
-      const { tag_name: tagName, target_commitish: target, name, body: notes, draft } = JSON.parse(body);
-      const created = { id: ++ids, repo, tag_name: tagName, target, name, body: notes, draft, assets: [], upload_url: `${base}/uploads/${ids}{?name,label}` };
+      const fields = JSON.parse(body);
+      if (fields.tag_name === "navi-mac-latest" && state.channelPut !== 200) return json(state.channelPut, {});
+      const created = { ...fields, id: ++ids, repo, target: fields.target_commitish, assets: [], upload_url: `${base}/uploads/${ids}{?name,label}` };
       state.releases.push(created);
       return json(201, created);
     }
@@ -333,7 +268,8 @@ async function fakeGitHub({ push, token = push, commits = {}, tags = {}, rules =
     if (patch && req.method === "PATCH") {
       const release = state.releases.find((r) => r.id === Number(patch[1]));
       const change = JSON.parse(body);
-      release.draft = change.draft;
+      if (release.tag_name === "navi-mac-latest" && state.channelPut !== 200) return json(state.channelPut, {});
+      Object.assign(release, change);
       release.target = change.target_commitish ?? release.target;
       // 公开时按（这一下写进来的）目标打 tag，已有就沿用；附件换成公开地址。退回草稿时公开地址作废。
       if (!release.draft) state.tags[`${repo}:${release.tag_name}`] ??= release.target;
@@ -441,9 +377,9 @@ async function formalRehearsal() {
   await github.close();
   assert.equal(result.status, 0, result.out);
   assert.match(result.out, /沿用 o\/app 里已有的 Release/);
-  assert.deepEqual(writes(github), ["PUT /repos/o/feed/contents/navi/mac/appcast.xml", "PUT /repos/o/feed/contents/ash/mac/appcast.xml"],
+  assert.deepEqual(writes(github), ["PUT /repos/o/feed/contents/navi/mac/appcast.xml", "PUT /repos/o/feed/contents/ash/mac/appcast.xml", "POST /repos/o/app/releases"],
     "no second release, no second upload, no second publish; the appcast, then the notice for pre-rename apps");
-  assert.equal(github.state.releases.length, 1);
+  assert.equal(github.state.releases.length, 2);
   console.log("PASS: when the appcast is refused after the release went public, the release stays public and a rerun only adds the appcast");
 
   // 沿用一个旧草稿：它排在 150 个更新的 Release 后面（第二页），还记着别的提交、没有 tag。
@@ -452,7 +388,7 @@ async function formalRehearsal() {
   await github.close();
   assert.equal(result.status, 0, result.out);
   assert.match(result.out, /沿用 o\/app 里已有的草稿 Release/, "the draft is found past the first page");
-  assert.deepEqual(writes(github).filter((c) => c.startsWith("POST /repos")), [], "no second release is created");
+  assert.deepEqual(writes(github).filter((c) => c.startsWith("POST /repos")), ["POST /repos/o/app/releases"], "only the fixed download page is created");
   assert.equal(github.state.tags["o/app:navi-mac-v0.2.0-20000102.0001"], sha, "publishing writes this build's commit as the target, so the tag lands on it");
   console.log("PASS: an old draft is found on a later page and published with this build's commit as its tag");
 
@@ -465,7 +401,7 @@ async function formalRehearsal() {
   assert.match(result.out, /GitHub 凭证：GH_TOKEN/);
   const [release] = github.state.releases;
   assert.deepEqual(writes(github), ["POST /repos/o/app/releases", `POST /uploads/${release.id}`, `PATCH /repos/o/app/releases/${release.id}`,
-    "PUT /repos/o/feed/contents/navi/mac/appcast.xml", "PUT /repos/o/feed/contents/ash/mac/appcast.xml"],
+    "PUT /repos/o/feed/contents/navi/mac/appcast.xml", "PUT /repos/o/feed/contents/ash/mac/appcast.xml", "POST /repos/o/app/releases"],
     "release and dmg go to the app repo (as a draft, then public), then the appcast to the feed repo, then the notice for pre-rename apps");
   assert.ok(github.state.calls.includes(`GET /assets/${release.assets[0].id}`), "the uploaded dmg is read back before the release goes public");
   assert.equal(release.target, sha, "the tag is created on the commit the app was built from");
@@ -492,38 +428,47 @@ async function formalRehearsal() {
   assert.match(notice.text, /<sparkle:informationalUpdate><\/sparkle:informationalUpdate>/);
   assert.ok(notice.text.includes("<link>https://github.com/o/app/releases/tag/navi-mac-v0.2.0-20000102.0001</link>"), "it points at this release's page");
   assert.doesNotMatch(notice.text, /<enclosure/);
-  const link = `<!-- navi-mac-download -->\n**[下载 Navi 0.2.0（20000102.0001）](${url})**\n<!-- /navi-mac-download -->`;
-  assert.ok(readFileSync(readme, "utf8").includes(link), "the README download link names this very dmg");
-  assert.match(result.out, /README 的下载链接已改成这一版并提交/);
-  assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0001）");
-  assert.equal(git("show", "--name-only", "--format=", "HEAD"), "README.md", "only the README is committed");
-  assert.equal(git("status", "--porcelain"), "M other.txt", "someone else's change stays uncommitted");
-  console.log("PASS: a formal release proves write access to both repos and a pushed, untagged-elsewhere build commit before writing anything; then a draft release, upload, read-back, publish, the signed appcast in the feed repo, and only the README link committed locally");
+  const channel = github.state.releases.find((entry) => entry.tag_name === "navi-mac-latest");
+  assert.ok(channel.body.includes(url), "fixed download page points at the verified, immutable dmg");
+  assert.equal(channel.make_latest, "false");
+  assert.equal(channel.assets.length, 0, "the channel never duplicates or replaces a dmg");
+  assert.ok(readFileSync(readme, "utf8").includes("第一版还没发布"), "publishing leaves the README untouched");
+  assert.equal(git("log", "-1", "--format=%s"), "init");
+  assert.equal(git("status", "--porcelain"), "M other.txt");
+  console.log("PASS: formal publication verifies the dmg and signed feeds, then updates a Mac-only fixed page without committing local files");
 
-  // 全都发完了、只是 README 没提交上（这里把那个提交撤掉来模拟）：重跑只补 README，不再碰 GitHub。
-  git("reset", "-q", "--hard", initial);
-  writeFileSync(join(dirname(readme), "other.txt"), "someone else's uncommitted change\n");
-  assert.ok(readFileSync(readme, "utf8").includes("第一版还没发布"));
   github.state.calls.length = 0;
   result = await publish(github, app, { artifacts: "formal-artifacts-2" });
   assert.equal(result.status, 0, result.out);
   assert.match(result.out, /appcast 里已经是这个包：只补没做完的收尾/);
-  assert.deepEqual(writes(github), [], "nothing is written to GitHub again");
-  assert.ok(readFileSync(readme, "utf8").includes(link), "the README link is filled in");
-  assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0001）");
+  assert.deepEqual(writes(github), [], "a completed publication is idempotent");
 
-  // 再发一版，README 指向它；之后补旧版的收尾不把 README 倒回旧版。
+  channel.body = "old download page";
+  github.state.channelPut = 503;
+  result = await publish(github, app, { artifacts: "formal-artifacts-2" });
+  assert.notEqual(result.status, 0, "a failed channel update is a failed release, not a warning");
+  assert.doesNotMatch(result.out, /✓ 已发/, "success is reported only after the download page is confirmed");
+  assert.equal(release.draft, false);
+  assert.ok(github.state.files.has("o/feed:navi/mac/appcast.xml"));
+  github.state.channelPut = 200;
+  github.state.calls.length = 0;
+  result = await publish(github, app, { artifacts: "formal-artifacts-2" });
+  assert.equal(result.status, 0, result.out);
+  assert.deepEqual(writes(github), [`PATCH /repos/o/app/releases/${channel.id}`], "retry only repairs the channel");
+  assert.ok(channel.body.includes(url));
+
   result = await publish(github, fakeApp("20000102.0003", key.publicKey, { feed, commit: "abc1234", commitKey: "AshSourceCommit" }), { artifacts: "formal-artifacts-2" });
   assert.equal(result.status, 0, result.out);
-  assert.match(github.state.files.get("o/feed:ash/mac/appcast.xml").text, /<sparkle:version>20000102\.0003<\/sparkle:version>/, "the notice moves on to the newer version");
-  assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0003）");
+  assert.match(github.state.files.get("o/feed:ash/mac/appcast.xml").text, /<sparkle:version>20000102\.0003<\/sparkle:version>/);
+  assert.ok(channel.body.includes("20000102.0003"));
   github.state.calls.length = 0;
   result = await publish(github, app, { artifacts: "formal-artifacts-2" });
   await github.close();
   assert.equal(result.status, 0, result.out);
-  assert.match(result.out, /README 的下载链接留在更新的 20000102\.0003/);
+  assert.match(result.out, /Mac 下载页保持在更新源的最新版本/);
   assert.match(result.out, /改名前的更新源已经指着 20000102\.0003/);
-  assert.deepEqual(writes(github), [], "finishing an older version moves neither the README nor the notice back");
-  assert.equal(git("log", "-1", "--format=%s"), "docs(README): mac 版下载指向 0.2.0（20000102.0003）", "the README keeps the newer version");
-  console.log("PASS: rerunning a fully published version only finishes the README link, and never moves it back to an older version");
+  assert.deepEqual(writes(github), [], "an older retry moves neither feed nor channel backwards");
+  assert.ok(channel.body.includes("20000102.0003"));
+  assert.equal(git("log", "-1", "--format=%s"), "init");
+  console.log("PASS: retry repairs a failed channel without re-uploading and never rolls a newer page back");
 }

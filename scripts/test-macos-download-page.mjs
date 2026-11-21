@@ -1,0 +1,75 @@
+import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
+import { renderAppcast, renderItem } from "../desktop/macos/scripts/appcast.mjs";
+import { initializeDownloadPage, verifyDownload } from "../desktop/macos/scripts/init-download-page.mjs";
+import { updateDownloadChannel } from "../desktop/macos/scripts/release-channel.mjs";
+
+const config = { releaseRepo: "o/app", feedRepo: "o/feed", feedBranch: "main", appcastPath: "navi/mac/appcast.xml",
+  tagPrefix: "navi-mac-v", downloadTag: "navi-mac-latest" };
+const commit = "a".repeat(40);
+const bytes = Buffer.from("a signed test distribution");
+const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+config.publicKey = Buffer.from(publicKey.export({ format: "jwk" }).x, "base64url").toString("base64");
+const signature = sign(null, bytes, privateKey).toString("base64");
+const version = "20261121.040506";
+const tag = `navi-mac-v0.3.2-${version}`;
+const url = `https://github.com/o/app/releases/download/${tag}/Navi-0.3.2-${version}.dmg`;
+const candidate = { version, shortVersion: "0.3.2", commit, url, page: `https://github.com/o/app/releases/tag/${tag}` };
+const feed = (release = candidate) => renderAppcast({ title: "test", link: "https://github.com/o/app", items: [renderItem({
+  ...release, length: bytes.length, signature, minimumSystemVersion: "14.0", pubDate: new Date(),
+})] });
+const state = { feed: feed(), channel: null, writes: [], fail: false };
+const github = {
+  readFile: async () => ({ text: state.feed }),
+  commitSha: async () => commit,
+  findRelease: async (_repo, name) => name === config.downloadTag ? state.channel
+    : { tag_name: tag, draft: false, prerelease: false, assets: [{ name: `Navi-0.3.2-${version}.dmg`, browser_download_url: url, size: bytes.length }] },
+  call: async (method, path, { body }) => {
+    if (state.fail) throw new Error("channel rejected");
+    state.writes.push({ method, path, body });
+    state.channel = { id: 1, ...state.channel, ...body };
+    return { json: state.channel };
+  },
+};
+
+assert.match(await updateDownloadChannel(github, config, candidate), /下载页已更新/);
+assert.equal(state.writes[0].method, "POST");
+assert.equal(state.channel.tag_name, config.downloadTag);
+assert.equal(state.channel.make_latest, "false");
+assert.ok(state.channel.body.includes(url));
+assert.equal(state.channel.target_commitish, commit);
+const body = state.channel.body;
+assert.match(await updateDownloadChannel(github, config, candidate), /已经是这一版/);
+assert.equal(state.writes.length, 1);
+state.feed = feed({ ...candidate, version: "20261122.000001" });
+assert.match(await updateDownloadChannel(github, config, candidate), /保持在更新源的最新版本/);
+assert.equal(state.channel.body, body);
+state.feed = feed();
+state.channel.body = "<!-- navi-mac-build:20261122.000001 -->";
+assert.match(await updateDownloadChannel(github, config, candidate), /留在更新的/);
+state.channel.body = body;
+state.feed = feed({ ...candidate, url: "https://example.invalid/other.dmg" });
+await assert.rejects(updateDownloadChannel(github, config, candidate), /未更新/);
+state.feed = "";
+await assert.rejects(updateDownloadChannel(github, config, candidate), /未更新/);
+state.feed = feed();
+state.channel.body = "stale";
+state.fail = true;
+await assert.rejects(updateDownloadChannel(github, config, candidate), /channel rejected/);
+state.fail = false;
+await updateDownloadChannel(github, config, candidate);
+assert.equal(state.writes.at(-1).method, "PATCH");
+assert.equal(state.writes.at(-1).body.target_commitish, undefined, "channel updates never move its tag");
+console.log("PASS: Mac-only fixed page is idempotent, never changes historical assets/tags or global latest, and rejects incomplete feeds");
+
+const fetchDownload = async (address) => { assert.equal(address, url); return new Response(bytes); };
+const count = state.writes.length;
+assert.match(await initializeDownloadPage(github, config, { check: true, fetchDownload }), /已验证现有 Mac/);
+assert.equal(state.writes.length, count);
+await initializeDownloadPage(github, config, { fetchDownload });
+await assert.rejects(initializeDownloadPage(github, config, { fetchDownload: async () => new Response("tampered") }), /下载大小/);
+await assert.rejects(initializeDownloadPage(github, config, { fetchDownload: async () => new Response(null, { status: 404 }) }), /下载失败/);
+const modified = Buffer.from(bytes);
+modified[0] ^= 1;
+assert.throws(() => verifyDownload(modified, signature, config.publicKey), /签名无效/);
+console.log("PASS: initial migration verifies the existing public asset's URL, length and EdDSA signature before updating the page");
