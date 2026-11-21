@@ -127,7 +127,7 @@ export function PlanReadyCard({ takeover, onImplement, onRevise }: {
         </div>
       </header>
       <div className="question-card-options">
-        <button type="button" ref={goRef} className="plan-ready-go" disabled={!!busy} onClick={implement}>
+        <button type="button" ref={goRef} className="question-card-option plan-ready-go" disabled={!!busy} onClick={implement}>
           <span className="question-card-key" aria-hidden="true">1</span>
           <span>{busy === "implement" ? "正在开始…" : "实施此计划"}</span>
           <ArrowRight size={14} aria-hidden="true" />

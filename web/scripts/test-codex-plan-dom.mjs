@@ -2,6 +2,31 @@ import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
+async function assertImplementLayout(button, minimumHeight) {
+  const layout = await button.evaluate((element) => {
+    const [key, label, arrow] = [...element.children].map((child) => child.getBoundingClientRect().toJSON());
+    return {
+      display: getComputedStyle(element).display,
+      button: element.getBoundingClientRect().toJSON(),
+      row: element.parentElement.getBoundingClientRect().toJSON(),
+      key, label, arrow,
+    };
+  });
+  assert.equal(layout.display, "flex", "实施按钮必须沿用选项行的横向布局");
+  assert.ok(Math.abs(layout.button.width - layout.row.width) < 1, "整行都应可点击");
+  assert.ok(layout.button.height >= minimumHeight, "选项行保留足够的点击高度");
+  assert.equal(layout.key.width, 20, "快捷键不能撑满按钮");
+  assert.equal(layout.key.height, 20);
+  assert.ok(layout.key.x > layout.button.x, "内容与卡片左边缘保留间距");
+  assert.ok(layout.label.x >= layout.key.right + 9, "文字排在快捷键右侧");
+  assert.ok(layout.arrow.x >= layout.label.right + 9, "箭头排在文字右侧");
+  assert.ok(layout.arrow.right < layout.button.right, "箭头不能贴边或溢出");
+  for (const content of [layout.label, layout.arrow]) {
+    assert.ok(Math.abs(content.y + content.height / 2 - layout.key.y - layout.key.height / 2) < 1,
+      "快捷键、文字与箭头应垂直居中对齐");
+  }
+}
+
 const web = await startWebServer();
 let browser;
 const errors = [];
@@ -43,10 +68,11 @@ try {
   const implement = page.getByRole("button", { name: "实施此计划", exact: true });
   await implement.waitFor();
   assert.equal(await implement.isEnabled(), true);
+  await assertImplementLayout(implement, 38);
   const exported = await page.getByLabel("导出计划").textContent();
   assert.match(exported, /周额度管理台/);
   assert.doesNotMatch(exported, /尚未定稿/);
-  await page.screenshot({ path: "/tmp/navi-codex-plan-ready.png", fullPage: true });
+  await page.getByRole("region", { name: "计划已就绪" }).screenshot({ path: "/tmp/navi-codex-plan-ready.png", animations: "disabled" });
   await page.reload();
   await implement.waitFor();
   await page.getByRole("button", { name: "展开计划" }).click();
@@ -72,8 +98,9 @@ try {
   await page.reload();
   await implement.waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
+  await assertImplementLayout(implement, 44);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
-  await page.screenshot({ path: "/tmp/navi-codex-plan-mobile.png", fullPage: true });
+  await page.getByRole("region", { name: "计划已就绪" }).screenshot({ path: "/tmp/navi-codex-plan-mobile.png", animations: "disabled" });
   await page.setViewportSize({ width: 1200, height: 1100 });
   await page.getByRole("checkbox", { name: "模拟发送失败" }).check();
   await implement.click();
