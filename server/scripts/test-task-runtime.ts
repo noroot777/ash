@@ -76,6 +76,19 @@ try {
     endPreviewStart("other", ordinaryStart);
     endPreviewStart("other", developmentStart);
   }
+  const userStarting = beginPreviewStart("runtime");
+  const agentStarting = beginPreviewStart("runtime", undefined, "development");
+  try {
+    assert.equal((await okJson(await request("runtime/service", "DELETE", undefined, agentHeaders))).stopped, true);
+    assert.equal(previewStartCanceled(userStarting), false);
+    assert.equal(previewStartCanceled(agentStarting), true);
+    assert.equal(isPreviewStarting("runtime"), true);
+    assert.equal((await okJson(await request("runtime/service", "DELETE"))).stopped, true);
+    assert.equal(previewStartCanceled(userStarting), true);
+  } finally {
+    endPreviewStart("runtime", userStarting);
+    endPreviewStart("runtime", agentStarting);
+  }
   assert.deepEqual(await okJson(await request("runtime")), { service: null, browser: null });
   assert.equal((await request("runtime/service", "POST", { command: "node service.cjs" })).status, 409);
   assert.equal((await request("runtime/service", "POST", { command: "node service.cjs" }, { ...agentHeaders, [NAVI_HEADERS.directionToken]: "old" })).status, 409);
@@ -84,12 +97,14 @@ try {
   await assert.rejects(() => startDevelopmentService("missing", { command: "node service.cjs" }, async () => {}), /工作区/);
   const started = await okJson(await request("runtime/service", "POST", { command: "node service.cjs", name: "额度 Demo" }, agentHeaders));
   assert.equal(started.reused, false);
+  assert.equal(started.owner, "agent");
   assert.ok(started.service.url);
   const first = readAnyPreview("runtime")!;
   assert.equal(first.purpose, "development");
   assert.equal((await fetch(first.url!)).status, 200);
   const reused = await okJson(await request("runtime/service", "POST", { command: "node service.cjs" }, agentHeaders));
   assert.equal(reused.reused, true);
+  assert.equal(reused.owner, "agent");
   assert.equal(readAnyPreview("runtime")?.pid, first.pid);
   const realChrome = process.env.CHROME_BIN;
   process.env.CHROME_BIN = join(root, "missing-chrome");
@@ -355,13 +370,17 @@ try {
     assert.deepEqual(pageErrors, []);
     console.log(`UI screenshots: ${screenshots}`);
   }
-  await stopPreview("runtime", null);
+  await db.update(tasks).set({ activeTurnToken: "turn-runtime", activeDirectionToken: "direction-runtime", status: "running" }).where(eq(tasks.id, "runtime"));
+  await okJson(await request("runtime/service", "POST", { command: "node service.cjs" }, agentHeaders));
+  const agentServiceToStop = readAnyPreview("runtime")!;
+  await action({ action: "open" });
+  assert.equal((await okJson(await request("runtime/service", "DELETE", undefined, agentHeaders))).stopped, true);
   assert.equal(readAnyPreview("runtime"), null);
   assert.equal(alive(first.pid), false);
+  assert.equal(alive(agentServiceToStop.pid), false);
   assert.equal(taskBrowserState("runtime")?.status, "closed");
   assert.ok(existsSync(browserFile("runtime", "png")));
   assert.ok(JSON.parse(readFileSync(browserFile("runtime", "json"), "utf8")).activity.length);
-  await db.update(tasks).set({ activeTurnToken: "turn-runtime", activeDirectionToken: "direction-runtime", status: "running" }).where(eq(tasks.id, "runtime"));
   let allowStartup = () => {};
   let startupReached = () => {};
   const startupBlocked = new Promise<void>((resolve) => { allowStartup = resolve; });
@@ -409,6 +428,7 @@ try {
   for (const command of ["node service.cjs", "node ./service.cjs"]) {
     const reusedOrdinary = await okJson(await request("runtime/service", "POST", { command }, agentHeaders));
     assert.equal(reusedOrdinary.reused, true);
+    assert.equal(reusedOrdinary.owner, "user");
     assert.equal(reusedOrdinary.service.gen, ordinaryRecord.gen);
     assert.equal(reusedOrdinary.service.command, ordinaryRecord.cmd);
     assert.equal(reusedOrdinary.service.url, ordinaryRecord.url);
@@ -426,6 +446,7 @@ try {
       await setTaskStatus("runtime", "running");
       const continuedOrdinary = await okJson(await request("runtime/service", "POST", { command: "node ./service.cjs" }, agentHeaders));
       assert.equal(continuedOrdinary.reused, true);
+      assert.equal(continuedOrdinary.owner, "user");
       assert.equal(continuedOrdinary.service.gen, ordinaryRecord.gen);
       assert.equal(readAnyPreview("runtime")?.gen, ordinaryRecord.gen);
       assert.equal(readAnyPreview("runtime")?.url, ordinaryRecord.url);
@@ -440,15 +461,57 @@ try {
     endPreviewStart("runtime", pendingOrdinary);
     endPreviewStart("runtime", ordinaryRecord.gen!);
   }
+  assert.equal((await okJson(await request("runtime/service", "DELETE", undefined, agentHeaders))).stopped, false);
+  assert.equal(readAnyPreview("runtime")?.gen, ordinaryRecord.gen);
+  assert.equal(alive(ordinaryRecord.pid), true);
+  assert.equal((await fetch(ordinaryRecord.url!)).status, 200);
+  assert.equal(taskBrowserState("runtime")?.status, "closed");
+  await action({ action: "open" });
+
+  const ordinaryFile = join(root, "runs", "runtime", "preview.json");
+  rmSync(ordinaryFile);
+  let replacementChecks = 0;
+  try {
+    await assert.rejects(() => startDevelopmentService("runtime", { command: "node ./service.cjs" }, async () => {
+      if (++replacementChecks === 2) writeFileSync(ordinaryFile, JSON.stringify(ordinaryRecord));
+    }), /已有用户预览/);
+    assert.equal(readAnyPreview("runtime")?.gen, ordinaryRecord.gen);
+    assert.equal(alive(ordinaryRecord.pid), true);
+  } finally { writeFileSync(ordinaryFile, JSON.stringify(ordinaryRecord)); }
+
+  writeFileSync(ordinaryFile, JSON.stringify({ ...ordinaryRecord, state: "starting" }));
+  beginDriving("runtime", ordinaryRecord.gen!);
+  try {
+    assert.equal((await okJson(await request("runtime/service", "DELETE", undefined, agentHeaders))).stopped, false);
+    assert.equal(previewStartCanceled(ordinaryRecord.gen!), false);
+    assert.equal(readAnyPreview("runtime")?.gen, ordinaryRecord.gen);
+    assert.equal(alive(ordinaryRecord.pid), true);
+  } finally {
+    endPreviewStart("runtime", ordinaryRecord.gen!);
+    writeFileSync(ordinaryFile, JSON.stringify(ordinaryRecord));
+  }
   const { state: _state, ...legacyRecord } = ordinaryRecord;
   writeFileSync(join(root, "runs", "runtime", "preview.json"), JSON.stringify(legacyRecord));
   await stopPreviewOnRerun("runtime");
-  assert.equal((await startDevelopmentService("runtime", { command: "node ./service.cjs" }, async () => {})).reused, true);
+  const reusedLegacy = await startDevelopmentService("runtime", { command: "node ./service.cjs" }, async () => {});
+  assert.equal(reusedLegacy.reused, true);
+  assert.equal(reusedLegacy.owner, "user");
+  assert.equal((await okJson(await request("runtime/service", "DELETE", undefined, agentHeaders))).stopped, false);
   assert.equal(alive(ordinaryRecord.pid), true);
   assert.equal(readAnyPreview("runtime")?.gen, ordinaryRecord.gen);
-  assert.equal((await stopPreviewAtAccept("runtime")).stopped, true);
+  assert.equal((await okJson(await request("runtime/service", "DELETE"))).stopped, true);
   assert.equal(readAnyPreview("runtime"), null);
   assert.equal(alive(ordinaryRecord.pid), false);
+  assert.equal(taskBrowserState("runtime")?.status, "closed");
+  const acceptedPreview = await startPreview("runtime", {
+    id: "preview", kind: "preview", p: { cmd: "node service.cjs", mode: "command", life: "task", ready: "port" }, fail: null,
+  }, workspace);
+  assert.equal(acceptedPreview.ok, true);
+  if (!acceptedPreview.ok) throw new Error(acceptedPreview.reason);
+  await action({ action: "open" });
+  assert.equal((await stopPreviewAtAccept("runtime")).stopped, true);
+  assert.equal(readAnyPreview("runtime"), null);
+  assert.equal(alive(acceptedPreview.record.pid), false);
   assert.equal(taskBrowserState("runtime")?.status, "closed");
   console.log("PASS task runtime: service ownership/reuse/replacement, continuation and cold-start lifetimes, watch-only open/reconnect, takeover, persistent frames, ordinary preview continuation and acceptance cleanup");
 } finally {

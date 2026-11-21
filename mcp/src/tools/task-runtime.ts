@@ -10,14 +10,14 @@ const identity = {
 
 export function registerTaskRuntimeTools(server: McpServer): void {
   server.registerTool("start_dev_service", {
-    description: "在当前任务工作区启动托管 Web 服务，用于开发验证和完成后的用户预览。健康检查通过才返回就绪；已有用户预览优先复用，返回其实际命令和地址，不停止或替换；开发服务同命令复用。服务独立于智能体进程，完成后保持运行，任务页面可打开、看日志、停止。使用 $PORT 等动态端口，避免 shell 后台进程随会话退出。",
+    description: "在当前任务工作区启动托管 Web 服务，用于开发验证和完成后的用户预览。健康检查通过才返回就绪；已有用户预览优先复用，返回 owner:user 及其实际命令和地址，不停止或替换；智能体托管服务返回 owner:agent，同命令复用。服务独立于智能体进程，完成后保持运行，任务页面可打开、看日志、停止。使用 $PORT 等动态端口，避免 shell 后台进程随会话退出。",
     inputSchema: { ...identity, command: z.string().min(1), name: z.string().max(80).optional() },
   }, async ({ taskId, directionToken, ...body }) => {
     try { return ok(await call("POST", `/tasks/${encodeURIComponent(taskId)}/runtime/service`, body, directionToken)); }
     catch (error) { return fail(error); }
   });
   server.registerTool("stop_dev_service", {
-    description: "停止当前任务的托管服务和共享浏览器；保留日志、最后画面与操作记录。不影响其他任务。",
+    description: "停止当前任务中由智能体托管的服务和在途启动，并关闭共享浏览器；借用的用户预览保持运行，不会停止或取消。保留日志、最后画面与操作记录。不影响其他任务。",
     inputSchema: identity,
   }, async ({ taskId, directionToken }) => {
     try { return ok(await call("DELETE", `/tasks/${encodeURIComponent(taskId)}/runtime/service`, undefined, directionToken)); }

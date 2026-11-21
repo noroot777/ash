@@ -5,7 +5,7 @@ import { tasks } from "./db/schema.js";
 import { taskFileRoot } from "./file-browser.js";
 import { isolatedWorkspaceOwner } from "./task-workspace.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
-import { beginPreviewStart, endPreviewStart, startPreview, isPreviewStarting } from "./preview.js";
+import { beginPreviewStart, endPreviewStart, startPreview, stopPreview, isPreviewStarting } from "./preview.js";
 import { alive, lastPreview, readAnyPreview } from "./preview-store.js";
 import { previewState } from "./preview-public.js";
 import { canConnect } from "./preview-probe.js";
@@ -13,6 +13,10 @@ import { canConnect } from "./preview-probe.js";
 export function developmentService(taskId: string) {
   const record = readAnyPreview(taskId) ?? lastPreview(taskId);
   return record?.purpose === "development" ? previewState(taskId) : null;
+}
+
+export async function stopDevelopmentService(taskId: string, caller: "agent" | "user") {
+  return { stopped: await stopPreview(taskId, "用户或智能体停止托管服务", caller === "agent" ? { purpose: "development" } : undefined) };
 }
 
 export async function developmentDirectory(taskId: string): Promise<string> {
@@ -40,7 +44,7 @@ export async function startDevelopmentService(
     await beforeStart();
     const current = readAnyPreview(taskId);
     if (!current || current.gen !== existing.gen || current.pid !== existing.pid || current.state === "starting") throw new Error("服务已被停止或替换，请重试");
-    return { reused: true, service: previewState(taskId) };
+    return { reused: true, owner: existing.purpose === "development" ? "agent" as const : "user" as const, service: previewState(taskId) };
   }
   if (isPreviewStarting(taskId)) throw new Error("服务正在启动，请查看状态或停止后重试");
   if (existing && existing.purpose !== "development") throw new Error("此任务的预览暂不可用，请查看预览状态和日志");
@@ -54,6 +58,6 @@ export async function startDevelopmentService(
       services: [{ id: "main", name: input.name?.trim() || "Demo", command, enabled: true, kind: "web" }],
     });
     if (!result.ok) throw new Error(result.reason);
-    return { reused: false, service: previewState(taskId) };
+    return { reused: false, owner: "agent" as const, service: previewState(taskId) };
   } finally { endPreviewStart(taskId, gen); }
 }

@@ -5,11 +5,10 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf } from "./auth/context.js";
 import { requireTaskAccess } from "./auth/visibility.js";
-import { developmentService, startDevelopmentService } from "./task-runtime-service.js";
+import { developmentService, startDevelopmentService, stopDevelopmentService } from "./task-runtime-service.js";
 import { refreshBrowserFrame, taskBrowserAction, taskBrowserState } from "./task-browser.js";
 import { browserFrame } from "./task-browser-store.js";
 import { runtimeCaller } from "./task-runtime-auth.js";
-import { stopPreview } from "./preview.js";
 
 const errorBody = (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) });
 
@@ -37,8 +36,8 @@ export function mountTaskRuntimeRoutes(api: Hono): void {
   api.delete("/tasks/:id/runtime/service", async (c) => {
     const taskId = c.req.param("id");
     try {
-      await runtimeCaller(c, taskId);
-      return c.json({ stopped: await stopPreview(taskId, "用户或智能体停止托管服务") });
+      const caller = await runtimeCaller(c, taskId);
+      return c.json(await stopDevelopmentService(taskId, caller.agent ? "agent" : "user"));
     } catch (error) { return c.json(errorBody(error), 409); }
   });
   api.get("/tasks/:id/runtime/browser/frame", async (c) => {

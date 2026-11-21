@@ -40,6 +40,8 @@ export async function runPreview(
   const primaryId = configs.find((s) => s.id === options?.primaryServiceId)?.id ?? configs.find((s) => s.kind === "web")?.id ?? configs[0].id;
   const ports = await freePorts(Math.max(PORT_POOL, configs.length));
   if (canceledGens.has(gen)) return { ok: false, reason: CANCELED };
+  const current = readAnyPreview(taskId);
+  if (options?.purpose === "development" && current && current.purpose !== "development") return { ok: false, reason: "已有用户预览，请重试以复用当前预览" };
   if (configs.length > 1 && ports.length < configs.length) return { ok: false, reason: "无法为所选服务分配足够的空闲端口" };
   const dir = join(RUNS_DIR, taskId);
   mkdirSync(dir, { recursive: true });
