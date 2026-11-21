@@ -16,7 +16,8 @@ try {
   const submit = page.locator(".studio-card .send-key-main");
   const records = async () => JSON.parse(await page.getByTestId("created").innerText());
   const directoryLabel = () => baseButton.innerText();
-  const AUTOMATIC = "跟随项目分支（创建时确定）";
+  // 键上只写名字，括号里的说明在展开的菜单里。
+  const AUTOMATIC = "跟随项目分支";
   const expectAutomatic = () => waitUntil(async () => (await directoryLabel()).includes(AUTOMATIC), "工作目录回到「跟随项目分支」");
   const selectBase = async (name) => {
     await baseButton.click();

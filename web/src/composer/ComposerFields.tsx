@@ -10,10 +10,10 @@ import type { ComposerExecutorConfig } from "./executorOverrides.ts";
 import { ExecutorPickerField } from "./ExecutorPickerField.tsx";
 import { ComposerWorkspace } from "./ComposerWorkspace.tsx";
 
-/** 摆进新建卡片的几块：输入区下面那排入口、卡片下面那行工作目录、右下角的「谁来做」。 */
+/** 摆进新建卡片的几块：输入区下面那排入口（工作目录打头）、右下角的「谁来做」。 */
 export type ComposerFieldParts = {
   options: { org: ReactNode; more: ReactNode };
-  /** 输入卡下面常驻的那一行：工作目录和 base 分支。 */
+  /** 底排打头那一组：工作目录和 base 分支，常驻、不用点开。 */
   workspace: ReactNode;
   executorTools: ReactNode;
 };

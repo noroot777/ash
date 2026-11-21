@@ -196,8 +196,8 @@ try {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("button", { name: /^智能体：/ }).waitFor();
   assert.equal(await worktreeSwitch.getAttribute("aria-checked"), "false", "项目默认是「关」，面板该预填项目目录");
-  const saveDefault = page.getByRole("button", { name: "设为本项目默认" });
-  assert.equal(await saveDefault.count(), 0, "跟项目默认一致时不出「设为本项目默认」");
+  const saveDefault = page.getByRole("button", { name: "设为默认", exact: true });
+  assert.equal(await saveDefault.count(), 0, "跟项目默认一致时不出「设为默认」");
   await worktreeSwitch.click();
   await saveDefault.click();
   await page.waitForFunction(() => document.querySelector('[data-testid="project-worktree-default"]')?.textContent === "开");

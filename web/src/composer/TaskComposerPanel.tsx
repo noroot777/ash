@@ -464,11 +464,10 @@ export function TaskComposerPanel({
             <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending}
               error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
           </ImagePreviewGroup>
-          {/* 底排：附件、选项入口在左；谁来做、发送键守在右下角（和回复框一个落点）。
+          {/* 底排：附件、工作目录、选项入口在左；谁来做、发送键守在右下角（和回复框一个落点）。
               一行放不下时右边那一组整组换到下一行、仍靠右，不压缩、不叠到左边的入口上。 */}
           <footer className="composer-footer">
-            <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
-            <div className="composer-opts">{home
+            <div className="composer-opts"><AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />{workspace}{home
               ? <ComposerExpand onExpand={home.onExpand} />
               : <>{options.org}{options.more}</>}<ComposerShortcutHelp /></div>
             <div className="composer-foot-run">
@@ -493,8 +492,7 @@ export function TaskComposerPanel({
             </div>
           </footer>
           {allAttachments.length > 0 && <div className="studio-input-status" role="status">{allAttachments.length} 个附件</div>}
-          </div>
-          {workspace}</>}
+          </div></>}
           </ComposerFields>
           {home?.below}
         </div>

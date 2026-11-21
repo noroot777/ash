@@ -7,8 +7,8 @@ import { Toggle } from "../components/ui.tsx";
 const FOLLOW_PREREQUISITES = "跟着前置走（起跑时定）";
 
 /**
- * 输入卡下面常驻的一行：在哪干活、从哪条分支开工。每建一条任务都要看一眼，所以直接摆出来，
- * 不再收进点开才看得见的浮层。
+ * 输入卡底排打头的一组：在哪干活、从哪条分支开工。每建一条任务都要看一眼，所以直接摆在
+ * 卡片里，不再收进点开才看得见的浮层。
  *
  * 这颗开关每次新建任务都要面对一遍，所以「把这次的选择变成本项目默认」就放在改它的地方 ——
  * 手机端(mobile/src/app/new.tsx)早就是这样；只在这次偏离了本项目默认时才出现。
@@ -66,7 +66,8 @@ export function ComposerWorkspace({
     ...remote.branches.map((branch) => ({ value: branch.fullRef, label: branch.ref, mono: true, group: "远端" })),
   ];
   const shownBase = following ? "" : base;
-  const baseLabel = baseOptions.find((option) => option.value === shownBase)?.label ?? (shownBase || automaticBaseLabel);
+  // 键上只写名字，括号里那半句说明留在展开的菜单里：底排寸土寸金。
+  const baseLabel = (baseOptions.find((option) => option.value === shownBase)?.label ?? (shownBase || automaticBaseLabel)).replace(/（[^）]*）$/, "");
   const remoteBase = following || branches.includes(base) ? null : remote.branches.find((branch) => branch.fullRef === base) ?? null;
   const mergeInto = following ? followPrerequisites.mergeTarget ?? automaticBaseLabel
     : remoteBase ? branches.includes(remoteBase.branch) ? remoteBase.branch : `${remoteBase.branch}（新建，跟踪 ${remoteBase.ref}）`
@@ -85,9 +86,9 @@ export function ComposerWorkspace({
     {!locked && useWorktree !== worktreeDefault && <>
       <button type="button" className="composer-workspace-save" disabled={savingWorktreeDefault}
         onClick={() => { tip.hide(); onSaveWorktreeDefault(); }} {...tip.anchorProps}>
-        {savingWorktreeDefault ? "保存中…" : "设为本项目默认"}
+        {savingWorktreeDefault ? "保存中…" : "设为默认"}
       </button>
-      <HoverTip at={tip.at}>本项目默认是「{workspaceLabel(worktreeDefault)}」，这次只对本任务生效</HoverTip>
+      <HoverTip at={tip.at}>本项目默认是「{workspaceLabel(worktreeDefault)}」，这次只对本任务生效；点它把这次的选择设为本项目默认</HoverTip>
     </>}
   </div>;
 }
