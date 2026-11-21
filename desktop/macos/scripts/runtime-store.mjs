@@ -71,9 +71,9 @@ export function verifyRuntime(source, expectedID) {
   return manifest;
 }
 
-export function installRuntime(source, store) {
+export function installRuntime(source, store, { activate = true } = {}) {
   const descriptor = process.platform === "darwin" ? openSync(join(source, ".in-use"), constants.O_RDONLY | 0x10) : null;
-  try { return withStoreLock(store, () => publishRuntime(source, store)); }
+  try { return withStoreLock(store, () => publishRuntime(source, store, activate)); }
   finally { if (descriptor !== null) closeSync(descriptor); }
 }
 
@@ -126,14 +126,14 @@ export function collectRuntimes(store) {
   });
 }
 
-function publishRuntime(source, store) {
+function publishRuntime(source, store, activate) {
   const manifest = verifyRuntime(source);
   mkdirSync(store, { recursive: true, mode: 0o700 });
   const target = join(realpathSync(store), manifest.id);
   if (existsSync(target)) {
     if (lstatSync(target).isSymbolicLink()) throw new Error(`运行时目标不能是链接：${target}`);
     verifyRuntime(target, manifest.id);
-    activateRuntime(store, manifest.id);
+    if (activate) activateRuntime(store, manifest.id);
     return target;
   }
   const stage = join(store, `.installing-${randomUUID()}`);
@@ -145,7 +145,7 @@ function publishRuntime(source, store) {
       if (!existsSync(target) || lstatSync(target).isSymbolicLink()) throw error;
       verifyRuntime(target, manifest.id);
     }
-    activateRuntime(store, manifest.id);
+    if (activate) activateRuntime(store, manifest.id);
     return target;
   } finally {
     rmSync(stage, { recursive: true, force: true });
@@ -157,6 +157,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const [operation, source, store] = process.argv.slice(2);
     if (operation === "seal" && source) console.log(sealRuntime(source).id);
     else if (operation === "install" && source && store) console.log(installRuntime(source, store));
+    else if (operation === "stage" && source && store) console.log(installRuntime(source, store, { activate: false }));
     else if (operation === "activate" && source && store) selectRuntime(source, store);
     else if (operation === "gc" && source) console.log(JSON.stringify(collectRuntimes(source)));
     else throw new Error("usage: runtime-store.mjs seal <runtime> | install <runtime> <store>");

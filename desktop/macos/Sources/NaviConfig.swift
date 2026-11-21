@@ -220,6 +220,7 @@ enum DatabaseFile {
 enum RuntimeStore {
   private static let lock = NSLock()
   private static var prepared = false
+  private static var staged = false
   private static var reclaimed = Set<Int>()
   static var restored: URL?
   static var root: URL { NaviConfig.dataURL.appendingPathComponent(".mac-runtimes", isDirectory: true) }
@@ -242,10 +243,10 @@ enum RuntimeStore {
     return NaviHealth.samePath(path, root.appendingPathComponent(id).path)
   }
 
-  static func prepare() throws {
+  static func prepare(activate: Bool = true) throws {
     lock.lock()
     defer { lock.unlock() }
-    if prepared { return }
+    if prepared || (!activate && staged) { return }
     let source = NaviConfig.bundledRuntimeURL
     let manifest = source.appendingPathComponent(".runtime.json")
     guard FileManager.default.fileExists(atPath: manifest.path) else {
@@ -257,7 +258,8 @@ enum RuntimeStore {
     guard destination != nil else { throw SQLiteFile.Failure("app 的运行时清单损坏。") }
     let process = Process()
     process.executableURL = source.appendingPathComponent("node/bin/node")
-    process.arguments = [source.appendingPathComponent("scripts/runtime-store.mjs").path, "install", source.path, root.path]
+    process.arguments = [source.appendingPathComponent("scripts/runtime-store.mjs").path,
+                         activate ? "install" : "stage", source.path, root.path]
     process.standardInput = FileHandle.nullDevice
     process.standardOutput = FileHandle.nullDevice
     let errors = Pipe()
@@ -268,7 +270,8 @@ enum RuntimeStore {
     guard process.terminationStatus == 0 else {
       throw SQLiteFile.Failure("准备独立运行时失败：\(String(data: detail, encoding: .utf8) ?? "")")
     }
-    prepared = true
+    staged = true
+    if activate { prepared = true }
   }
 
   static func activate(_ runtime: URL) throws {

@@ -252,7 +252,13 @@ final class UpdateGate {
               let codeDir = instance.codeDir else { return false }
         return RuntimeStore.contains(codeDir)
       }()
-      let verdict = RestartImpactProbe.assessSync(preservingRuntime: preservingRuntime)
+      let verdict: ImpactVerdict
+      do {
+        if preservingRuntime, try RuntimeRecovery.paused() != nil {
+          try RuntimeStore.prepare(activate: false)
+        }
+        verdict = RestartImpactProbe.assessSync(preservingRuntime: preservingRuntime)
+      } catch { verdict = .unknown("新版运行时准备失败：\(error.localizedDescription)") }
       DispatchQueue.main.async { self.preservingRuntime = preservingRuntime; completion(verdict) }
     }
   }

@@ -56,7 +56,7 @@ const server=http.createServer((request,response)=>{
  if(url.pathname==='/api/restart-impact'){
   if(!fs.existsSync(data+'/.recovery-retry-clear')){response.writeHead(500);response.end('{}');return}
   event({retryImpact:true,schema:url.searchParams.get('schema')});
-  response.end(JSON.stringify({survives:[],resumes:[],interrupted:[],mcpDisrupted:[],runtimeHandover:{blocked:[],sessions:[],
+  response.end(JSON.stringify({survives:[],resumes:[],interrupted:[],mcpDisrupted:[],runtimeHandover:{blocked:fs.existsSync(data+'/.recovery-retry-busy')?[{id:'pending',title:'尚未结束的任务',reason:'等待完成'}]:[],sessions:[],
    target:{protocol:1,schema:url.searchParams.get('schema')}}}));return;
  }
  if(url.pathname==='/api/runtime-handover'){
@@ -168,7 +168,7 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
       const backupFiles = () => existsSync(join(data, "backups")) && !options.backupFailure
         ? readdirSync(join(data, "backups")).filter((name) => name.endsWith(".db")) : [];
       const oldMetadata = JSON.parse(readFileSync(join(previous, ".handover.json"), "utf8"));
-      await operation({ run, pid, data, previous, next: join(data, ".mac-runtimes", nextId), oldMetadata, recorded, backupFiles, stopLaunched });
+      await operation({ run, pid, data, bundled, previous, next: join(data, ".mac-runtimes", nextId), oldMetadata, recorded, backupFiles, stopLaunched });
     }, [
       async () => { for (const fixture of fixtures) await fixture.dispose(); },
       async () => {
@@ -417,6 +417,41 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
       });
     }
     console.log("✓ durable recovery pause survives launcher and app restarts, preserves old version identity and fails closed on invalid markers");
+    for (const retry of ["ready", "wait", "failure"]) {
+      await scenario({}, async ({ run, data, bundled, previous, next, recorded, stopLaunched }) => {
+        await run(0, { START_FAILED_MIGRATION: "1", HEADLESS_RECOVERY: "1" });
+        await stopLaunched();
+        rmSync(next, { recursive: true });
+        writeFileSync(join(data, ".recovery-retry-clear"), "");
+        copyFileSync(join(bundled, ".handover.json"), join(data, ".recovery-retry-target.json"));
+        const launcher = readFileSync(join(data, ".mac-runtimes/mcp.sh"), "utf8");
+        if (retry === "wait") writeFileSync(join(data, ".recovery-retry-busy"), "");
+        if (retry === "failure") writeFileSync(join(bundled, "server/dist/db/schema.js"), "corrupted target");
+        const output = await run(retry === "failure" ? 2 : 0, {
+          MODE: "paused-gui", RETRY_PAUSED_TARGET: retry, ANSWERS: "",
+        });
+        assert.match(output, /PERSISTED_GATE blocked/);
+        if (retry === "failure") {
+          assert.match(output, /STAGING_REFUSED_OLD_PRESERVED/);
+          assert.equal(realpathSync(join(data, ".mac-runtimes/current")), realpathSync(previous));
+          assert.equal(existsSync(join(data, ".mac-runtime-paused.json")), true);
+          assert.equal(recorded().some((event) => event.retryHandoff || event.retryImpact), false);
+          assert.equal(existsSync(next), false);
+        } else {
+          assert.match(output, /STAGED_WITHOUT_ACTIVATION/);
+          assert.match(output, /PAUSED_RETRY_OUTCOME ready/);
+          assert.ok(output.includes(`PAUSED_RETRY_SERVICE ${realpathSync(next)}`), output);
+          if (retry === "wait") assert.match(output, /RETRY_PROMPT/);
+          const target = JSON.parse(readFileSync(join(next, ".handover.json"), "utf8"));
+          assert.ok(recorded().some((event) => event.retryImpact && event.schema === target.schema));
+          assert.ok(recorded().some((event) => event.retryHandoff?.schema === target.schema));
+          assert.equal(existsSync(join(data, ".mac-runtime-paused.json")), false);
+          assert.equal(existsSync(join(data, ".mac-runtime-recovery.json")), false);
+        }
+        assert.equal(readFileSync(join(data, ".mac-runtimes/mcp.sh"), "utf8"), launcher);
+      });
+    }
+    console.log("✓ paused retry stages a missing target without activation, switches normally after idle or draining tasks and preserves the old service on staging failure");
     await scenario({}, async ({ run, data }) => {
       const output = await run(0, { ADOPTED_ROLLBACK: "1" });
       assert.match(output, /REFUSED_ADOPTED/);

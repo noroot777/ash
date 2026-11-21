@@ -42,11 +42,60 @@ if environment["MODE"]?.hasPrefix("paused-") == true {
   precondition(ServerRecord.read()?.bundleVersion == pause.version)
   emit("PAUSED_SERVICE \(instance.codeDir!) VERSION \(pause.version)")
   if environment["MODE"] == "paused-gui" {
+    let retry = environment["RETRY_PAUSED_TARGET"]
     gate.report = { emit("PERSISTED_NOTICE \($0)") }
-    gate.request(.staleServer(from: pause.version)) { fatalError("automatic retry escaped durable pause") }
+    gate.request(.staleServer(from: pause.version)) {
+      precondition(retry != nil, "automatic retry escaped durable pause")
+      proceeded = true
+    }
     RunLoop.main.run(until: Date().addingTimeInterval(0.2))
     precondition(gate.phase == .blocked && gate.hasPending)
     emit("PERSISTED_GATE blocked")
+    if let retry {
+      let deadline = Date().addingTimeInterval(15)
+      gate.pollInterval = 0.05
+      gate.report = { emit("RETRY_REPORT \($0)"); reported = true }
+      gate.onHoldChanged = { note in
+        guard note != nil else { return }
+        precondition(RuntimeStore.contains(NaviConfig.targetRuntimeURL.path))
+        precondition(NaviHealth.samePath(RuntimeStore.root.appendingPathComponent("current").path, pause.previous))
+        precondition(FileManager.default.fileExists(atPath: RuntimeRecovery.pauseURL.path))
+        emit("STAGED_WITHOUT_ACTIVATION")
+      }
+      gate.ask = { prompt in
+        emit("RETRY_PROMPT \(prompt.detail)")
+        if retry == "failure" {
+          precondition(prompt.detail.contains("新版运行时准备失败"))
+        } else {
+          precondition(retry == "wait" && !prompt.detail.contains("新版接管协议无法核实"))
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            try! FileManager.default.removeItem(at: NaviConfig.dataURL.appendingPathComponent(".recovery-retry-busy"))
+          }
+        }
+        return .wait
+      }
+      gate.reconsider()
+      while !proceeded && !reported && Date() < deadline {
+        if retry == "failure", gate.phase == .waiting { break }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+      }
+      if retry == "failure" {
+        precondition(!proceeded && !reported && gate.phase == .waiting && !gate.isHolding)
+        precondition(NaviHealth.samePath(RuntimeStore.root.appendingPathComponent("current").path, pause.previous))
+        let savedPause = try RuntimeRecovery.paused()
+        precondition(savedPause != nil)
+        emit("STAGING_REFUSED_OLD_PRESERVED")
+        exit(2)
+      }
+      precondition(proceeded && !reported)
+      let savedPause = try RuntimeRecovery.paused()
+      precondition(savedPause == nil)
+      emit("PAUSED_RETRY_OUTCOME \(ServerLauncher.shared.ensureRunningSync(timeout: 5))")
+      guard case .navi(let next) = NaviHealth.probeSync() else { fatalError("target did not start") }
+      precondition(NaviHealth.samePath(next.codeDir!, NaviConfig.targetRuntimeURL.path))
+      precondition(ServerRecord.staleVersion(servingPID: next.pid) == nil)
+      emit("PAUSED_RETRY_SERVICE \(next.codeDir!)")
+    }
   }
   exit(0)
 }
