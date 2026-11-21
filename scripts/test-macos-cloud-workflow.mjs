@@ -63,6 +63,27 @@ try {
   const directory = join(runner, "navi-mac-release");
   assert.equal(request.buildNumber, "20261121.040506");
   assert.equal(readFileSync(env.GITHUB_OUTPUT, "utf8"), "restore=false\nartifact_id=\n");
+  const originalFetch = globalThis.fetch;
+  let feedRequests = 0;
+  globalThis.fetch = async (url, options) => {
+    feedRequests++;
+    assert.equal(url, "https://raw.githubusercontent.com/o/feed/main/navi/mac/appcast.xml");
+    assert.equal(options.headers?.authorization, undefined, "public feed reads never receive release credentials");
+    return new Response(state.feed);
+  };
+  try {
+    assert.equal((await prepareWorkflow({ env, root, github })).buildNumber, request.buildNumber);
+    assert.equal(feedRequests, 1, "a first build reads the public raw feed, not the unauthenticated Contents API");
+    state.artifacts = [{ name: "mac-release-123-arm64", id: 43, expired: false }];
+    globalThis.fetch = () => { throw new Error("API rate limit exceeded for shared runner IP"); };
+    const recovery = await prepareWorkflow({ env, root, github });
+    assert.equal(recovery.buildNumber, null, "publish recovery does not need the feed to allocate a build number");
+    assert.match(readFileSync(env.GITHUB_OUTPUT, "utf8"), /restore=true\nartifact_id=43/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    state.artifacts = [];
+  }
+  console.log("PASS: fresh builds read credential-free raw feeds; recovery succeeds without any feed request even when shared IPs are rate limited");
   await assert.rejects(prepareWorkflow({ env: { ...env, NAVI_MAC_VERSION: "0.3.3" }, root, github, publicGithub: github }), /版本与发布参数不同/);
   await assert.rejects(prepareWorkflow({ env: { ...env, NAVI_MAC_SOURCE_SHA: "f".repeat(40) }, root, github, publicGithub: github }), /git merge-base 失败/);
 

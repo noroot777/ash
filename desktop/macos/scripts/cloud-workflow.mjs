@@ -10,6 +10,7 @@ import { GitHub } from "./github.mjs";
 import { assertVersion, itemDetails, latestItem, nextBuildNumber, readConfig, runName, sourceVersion } from "./release-state.mjs";
 import { architectureConfig, assertArchitecture, distributionName, recoveryName } from "./architecture.mjs";
 import { verifyNativeArchitecture } from "./smoke-distribution.mjs";
+import { readPublicFeed } from "./public-feed.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const MAC = join(ROOT, "desktop/macos");
@@ -40,7 +41,7 @@ export async function prepareWorkflow({ env = process.env, root = ROOT, github, 
   const buildScript = run("git", ["show", `${request.source}:desktop/macos/build.sh`], { cwd: root });
   assert.equal(sourceVersion(buildScript), request.version, "源码里的版本与发布参数不同");
   github ??= new GitHub(env.GH_TOKEN);
-  publicGithub ??= new GitHub(null);
+  publicGithub ??= { readFile: readPublicFeed };
   const base = `/repos/${config.releaseRepo}/actions/runs/${request.runId}`;
   const metadata = (await github.call("GET", base)).json;
   assert.equal(metadata.event, "workflow_dispatch");
@@ -50,7 +51,7 @@ export async function prepareWorkflow({ env = process.env, root = ROOT, github, 
   const artifact = artifacts.find((entry) => entry.name === recoveryName(request.runId, request.architecture))
     ?? (request.architecture === "arm64" ? artifacts.find((entry) => entry.name === `mac-release-${request.runId}`) : null);
   if (artifact?.expired) throw new Error("原始恢复产物已经过期，停止发布；请发一个新版本，不能同号覆盖或重封旧包。");
-  const feed = await publicGithub.readFile(config.feedRepo, config.appcastPath, config.feedBranch);
+  const feed = artifact ? null : await publicGithub.readFile(config.feedRepo, config.appcastPath, config.feedBranch);
   const latest = itemDetails(latestItem(feed?.text));
   if (!artifact && latest?.shortVersion && compareVersions(request.version, latest.shortVersion) <= 0 && request.publish) {
     throw new Error(`更新源已经是 ${latest.shortVersion}：补收尾请重跑保留原始产物的工作流，否则使用新版本。`);

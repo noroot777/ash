@@ -175,6 +175,8 @@ Apple 芯片沿用 `navi/mac/appcast.xml`、`navi-mac-v…` tag 和历史 dmg �
 
 构建和安装依赖时没有发布凭证。原始 app、dmg、内容摘要、架构和构建号在对外发布前封进各自的恢复产物 `mac-release-<run id>-arm64|x64`，保留一天；tar 保留软链及可执行位。重跑优先恢复对应架构的原包，不换构建号、不重封同号 dmg。原产物已过期或缺失且已有对应 Release 时停止，改发新版本，不覆盖历史包。一次发布有一部分成功时，成功的包不撤回，失败部分靠同一工作流重跑补齐；固定页保留另一架构的现有下载。Actions 中显示的失败阶段就是恢复入口。
 
+首次构建从公开 raw 地址读取更新源，不占用共享 runner IP 的匿名 REST API 配额；短暂网络错误、限流和服务端错误最多重试三次。恢复已保存的原包时不再读取更新源或分配新构建号，发布前仍用发布凭证核对正式更新源。遇到只剩部分架构发布失败时，原工作流的「Re-run failed jobs」沿用原包补齐，不需要改版本或重新触发一条工作流。
+
 随后沿用原有事务：核对私钥与 app 公钥、更新源、源码提交及 tag → 草稿 Release → 上传 dmg → 经 API 下回校验 → 公开且核对 tag → 从公开地址下回校验 → 签名并提交主 appcast → 签名并提交旧 Ash 的通知 appcast → 更新 Mac 固定下载页。清单提交带原文件 SHA，冲突时拒绝覆盖。包公开后不撤回，重跑只补缺失步骤；固定下载页失败也算发布失败。raw.githubusercontent 的几分钟缓存可能延后客户端看到更新。
 
 README 只链接 `navi-mac-latest` 这个 Mac 专用 Release 页面。页面正文链接到最新成功版本的不可变 dmg，不重复上传附件，不移动历史 tag；入口自己的 tag 不跟着版本移动，也不占用整个仓库的 latest 标记。初始化入口可执行 `node desktop/macos/scripts/init-download-page.mjs --check` 验证现有公开包的地址、大小与 EdDSA 签名；去掉 `--check` 才创建或更新入口。发版不再改写、提交 README。
