@@ -334,7 +334,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   /// 正在换代码（UpdateGate 停了服务）、或者正按新设置重启服务（RemoteAccessSwitch）：盖上一屏、不探活，
   /// 办完的那一方会叫 loadHome。
   func showInstalling(_ note: String,
-                      detail: String = "装好后自动接上。接管得了的任务照常在跑；点了「现在装」的话，刚才列出的那些会被打断。") {
+                      detail: String = "完成后自动回到工作区。") {
     stopHealthPolling()
     stopInstanceGuard()
     pendingStartingScreen?.cancel()

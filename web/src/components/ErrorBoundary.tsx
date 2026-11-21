@@ -1,4 +1,5 @@
-import { Component, type ReactNode } from "react";
+import { Component, useEffect, type ReactNode } from "react";
+import { AppStateScreen } from "./AppStateScreen.tsx";
 
 // React 只有类组件能当错误边界。渲染里抛出的错误一路没人接,React 会卸载整棵树,页面只剩
 // body 底色、连一句报错都没有 —— 懒加载分块拉取失败就是这样把整个工作台弄没的。
@@ -31,11 +32,16 @@ export function LoadFailure({ what, onClose }: { what: string; onClose?: () => v
 
 // 根上的兜底:哪一块都没接住时,至少留下报错和一个刷新按钮,而不是一页空白。
 export function AppCrash({ error }: { error: Error }) {
+  useEffect(() => {
+    document.documentElement.dataset.windowSize = "work";
+  }, []);
   return (
-    <div className="app-crash" role="alert">
-      <p>页面出错了</p>
-      <pre>{error.message}</pre>
-      <button onClick={() => window.location.reload()}>刷新</button>
-    </div>
+    <AppStateScreen className="app-crash" title="页面没有正常显示" alert
+      actions={<button type="button" className="ui-button ui-button--primary" onClick={() => window.location.reload()}>重新载入</button>}>
+      <details>
+        <summary>错误详情</summary>
+        <pre>{error.message}</pre>
+      </details>
+    </AppStateScreen>
   );
 }

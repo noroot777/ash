@@ -1,0 +1,78 @@
+.app-state-screen {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 48px 28px;
+  background: var(--chrome);
+  color: var(--ink);
+}
+
+.app-state-screen__content {
+  width: min(440px, 100%);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.app-state-screen__mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 128px;
+  height: 128px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 30px;
+  background: var(--panel);
+}
+
+.app-state-screen h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: var(--w-strong);
+  line-height: 1.4;
+}
+
+.app-state-screen__detail {
+  width: 100%;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.app-state-screen__detail p { margin: 0; }
+
+.app-state-screen__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.app-state-screen details {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  text-align: left;
+}
+
+.app-state-screen summary { cursor: pointer; }
+
+.app-state-screen pre {
+  max-height: 30vh;
+  margin: 12px 0 0;
+  overflow: auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
