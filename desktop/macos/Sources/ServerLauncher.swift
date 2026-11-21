@@ -55,7 +55,11 @@ final class ServerLauncher {
   }
 
   func ensureRunningSync(timeout: TimeInterval) -> Outcome {
-    do { if NaviConfig.isLocal { try RuntimeStore.prepare() } }
+    do {
+      if NaviConfig.isLocal {
+        if try RuntimeRecovery.paused() == nil { try RuntimeStore.prepare() }
+      }
+    }
     catch { return .failed(error.localizedDescription) }
     if let settled = Self.settle(NaviHealth.probeSync()) { return settled }
     if let hold { return .failed(hold) }
@@ -79,10 +83,16 @@ final class ServerLauncher {
     defer { withExtendedLifetime(lock) {} }
     if let settled = Self.settle(NaviHealth.probeSync()) { return settled }
     if let hold { return .failed(hold) }
-    let runtime = NaviConfig.targetRuntimeURL
-    do { if RuntimeStore.destination != nil { try RuntimeStore.activate(runtime) } }
+    let pause: RuntimeRecovery.Pause?
+    let runtime: URL
+    do {
+      pause = try RuntimeRecovery.paused()
+      runtime = pause.map { URL(fileURLWithPath: $0.previous) } ?? NaviConfig.targetRuntimeURL
+      if pause != nil || RuntimeStore.destination != nil { try RuntimeStore.activate(runtime) }
+    }
     catch { return .failed("无法启用新版运行时，未启动服务：\(error.localizedDescription)") }
-    if let failure = Self.backUpBeforeMigration() { return .failed(failure) }
+    let version = pause?.version ?? NaviConfig.bundleVersion
+    if let failure = Self.backUpBeforeMigration(version: version) { return .failed(failure) }
     let parts = ["node/bin/node", "server/dist/index.js", "scripts/start-detached.mjs"].map { runtime.appendingPathComponent($0) }
     if let missing = parts.first(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
       return .failed("app 里自带的 Navi 不完整（缺 \(missing.path)）。重新装一次 Navi.app。")
@@ -97,11 +107,11 @@ final class ServerLauncher {
     case .success(let pid):
       // 进程一起来就记下 pid：这个启动器等不到它应答（被退掉、超时）也不要紧，之后谁看到它应答
       // 都能认出是它、替它确认（见 settle）。
-      ServerRecord.write(pid: Int(pid))
+      ServerRecord.write(pid: Int(pid), version: version)
       let outcome = waitReady(pid: pid, timeout: timeout)
       if case .failed(let startupFailure) = outcome, kill(pid, 0) != 0, errno == ESRCH {
         do {
-          if let previous = try RuntimeRecovery.restoreBeforeAdoption() {
+          if pause == nil, let previous = try RuntimeRecovery.restoreBeforeAdoption(reason: startupFailure) {
             switch spawnDetached(runtime: previous) {
             case .failure(let reason): return .failed("已恢复迁移前数据库，但旧服务启动失败：\(reason)")
             case .success(let previousPID):
@@ -132,7 +142,7 @@ final class ServerLauncher {
   /// 其余的 —— 退出时没过闸就被 Sparkle 装上了、`build.sh --install`、手动换了 app、导入来的库 ——
   /// 在这里补一份。备份不成、或者记不下「这一版要起了」就不起：库原样留着，配上旧版 app 还能回去。
   /// 返回 nil = 可以起。
-  private static func backUpBeforeMigration() -> String? {
+  private static func backUpBeforeMigration(version: String) -> String? {
     do {
       guard try DatabaseFile.existing(in: NaviConfig.dataURL) != nil else { return nil }
     } catch {
@@ -140,7 +150,7 @@ final class ServerLauncher {
     }
     let lastServedBy = ServerRecord.read()?.bundleVersion ?? "unknown"
     do {
-      if lastServedBy != NaviConfig.bundleVersion && !DatabaseBackup.covers(lastServedBy: lastServedBy) {
+      if lastServedBy != version && !DatabaseBackup.covers(lastServedBy: lastServedBy) {
         try DatabaseBackup.beforeUpdate(fromVersion: lastServedBy)
       }
     } catch {
@@ -148,7 +158,7 @@ final class ServerLauncher {
         + "腾出空间 / 修好权限后点「重试」；要回到旧版，把旧版 app 装回来就行（README「回到旧版」）。"
     }
     do {
-      try ServerRecord.writeAttempt()
+      try ServerRecord.writeAttempt(version: version)
     } catch {
       return "记不下这一次要起的是哪一版（\(NaviConfig.dataURL.path)：\(error.localizedDescription)），所以没起服务、库没动过。修好权限 / 腾出空间后点「重试」。"
     }

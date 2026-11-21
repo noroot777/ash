@@ -82,6 +82,21 @@ final class UpdateGate {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.request(purpose, proceed: proceed) }
       return
     }
+    if case .staleServer = purpose, phase != .preparing {
+      do {
+        if let pause = try RuntimeRecovery.paused() {
+          self.purpose = purpose
+          proceeds.append(proceed)
+          if phase != .blocked {
+            epoch += 1
+            stopPolling()
+            phase = .blocked
+            report("新版启动失败，已恢复旧服务和迁移前数据库。自动切换已暂停；请从菜单重试切换新版服务。\n\n\(pause.reason)")
+          }
+          return
+        }
+      } catch { report("回退暂停记录无法核实，未自动切换服务：\(error.localizedDescription)"); return }
+    }
     if case .update = purpose { self.purpose = purpose } else if self.purpose == nil { self.purpose = purpose }
     proceeds.append(proceed)
     if case .update = purpose, RuntimeStore.destination != nil {
@@ -366,7 +381,7 @@ final class UpdateGate {
           if let previous {
             try RuntimeRecovery.record(previous: previous, backup: backup, finalized: true)
           }
-          if let next = RuntimeStore.destination { try RuntimeStore.activate(next) }
+          try RuntimeRecovery.authorizeTarget()
           return .done(maintenance)
         } catch {
           maintenance.end()

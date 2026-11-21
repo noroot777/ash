@@ -32,6 +32,25 @@ if environment["MODE"]?.hasPrefix("ui") == true {
   exit(choice == .cancel ? 0 : 1)
 }
 
+if environment["MODE"]?.hasPrefix("paused-") == true {
+  let outcome = ServerLauncher.shared.ensureRunningSync(timeout: 5)
+  emit("PAUSED_OUTCOME \(outcome)")
+  guard case .ready = outcome else { exit(1) }
+  let pause = try RuntimeRecovery.paused()!
+  guard case .navi(let instance) = NaviHealth.probeSync() else { fatalError("paused service not running") }
+  precondition(NaviHealth.samePath(instance.codeDir!, pause.previous))
+  precondition(ServerRecord.read()?.bundleVersion == pause.version)
+  emit("PAUSED_SERVICE \(instance.codeDir!) VERSION \(pause.version)")
+  if environment["MODE"] == "paused-gui" {
+    gate.report = { emit("PERSISTED_NOTICE \($0)") }
+    gate.request(.staleServer(from: pause.version)) { fatalError("automatic retry escaped durable pause") }
+    RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    precondition(gate.phase == .blocked && gate.hasPending)
+    emit("PERSISTED_GATE blocked")
+  }
+  exit(0)
+}
+
 try RuntimeStore.prepare()
 if environment["MISSING_NEXT"] == "1" { try FileManager.default.removeItem(at: RuntimeStore.destination!) }
 
@@ -113,12 +132,23 @@ emit("PHASE \(gate.phase) MAINTENANCE \(Maintenance.activeNote() ?? "none")")
 if proceeded && environment["START_FAILED_MIGRATION"] == "1" {
   emit("OUTCOME \(ServerLauncher.shared.ensureRunningSync(timeout: 5))")
   if case .navi(let instance) = NaviHealth.probeSync() { emit("RESTORED_SERVICE \(instance.codeDir ?? "none")") }
+  let savedPause = try RuntimeRecovery.paused()
+  precondition(savedPause != nil)
+  if environment["HEADLESS_RECOVERY"] == "1" { emit("HEADLESS_PAUSE_SAVED"); exit(0) }
   while !reported && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
   precondition(reported && gate.phase == .blocked && gate.hasPending)
   RunLoop.main.run(until: Date().addingTimeInterval(0.2))
   precondition(gate.phase == .blocked)
   emit("RECOVERY_NOTICE_AND_PAUSE")
   reported = false
+  if environment["RESTART_PAUSED"] == "1" {
+    guard case .navi(let instance) = NaviHealth.probeSync(), let pid = instance.pid else { fatalError("old service not running") }
+    guard case .stopped = ServerShutdown.stop(expecting: .ours(pid: pid), timeout: 5) else { fatalError("old service did not stop") }
+    emit("PAUSED_RESTART \(ServerLauncher.shared.ensureRunningSync(timeout: 5))")
+    guard case .navi(let restarted) = NaviHealth.probeSync() else { fatalError("old service did not restart") }
+    precondition(NaviHealth.samePath(restarted.codeDir!, savedPause!.previous))
+    precondition(ServerRecord.read()?.bundleVersion == savedPause!.version)
+  }
   if environment["RETRY_AFTER_ROLLBACK"] == "1" || environment["NORMAL_RETRY_AFTER_ROLLBACK"] == "1" {
     let normal = environment["NORMAL_RETRY_AFTER_ROLLBACK"] == "1"
     if normal {
@@ -138,6 +168,8 @@ if proceeded && environment["START_FAILED_MIGRATION"] == "1" {
     precondition(proceeded && !reported)
     let record = try JSONDecoder().decode(RuntimeRecovery.Record.self, from: Data(contentsOf: RuntimeRecovery.url))
     precondition(NaviHealth.samePath(record.next, RuntimeStore.destination!.path))
+    let remainingPause = try RuntimeRecovery.paused()
+    precondition(remainingPause == nil)
     emit("RETRY_TARGET \(NaviHealth.realPath(NaviConfig.runtimeURL.path))")
     if normal {
       emit("RETRY_OUTCOME \(ServerLauncher.shared.ensureRunningSync(timeout: 5))")

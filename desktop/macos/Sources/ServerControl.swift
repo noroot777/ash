@@ -23,12 +23,12 @@ struct ServerRecord: Codable {
   var confirmedAt: Date? = nil
 
   /// 要起服务了：先记下是这一版。写不进去抛错，调用方就别起。
-  static func writeAttempt() throws {
-    try save(ServerRecord(pid: 0, bundleVersion: NaviConfig.bundleVersion, confirmedAt: read()?.confirmedAt))
+  static func writeAttempt(version: String = NaviConfig.bundleVersion) throws {
+    try save(ServerRecord(pid: 0, bundleVersion: version, confirmedAt: read()?.confirmedAt))
   }
 
-  static func write(pid: Int) {
-    try? save(ServerRecord(pid: pid, bundleVersion: NaviConfig.bundleVersion, confirmedAt: read()?.confirmedAt))
+  static func write(pid: Int, version: String = NaviConfig.bundleVersion) {
+    try? save(ServerRecord(pid: pid, bundleVersion: version, confirmedAt: read()?.confirmedAt))
   }
 
   /// 端口上自己那份应答了：是记录里那个进程，就确认它起来过。

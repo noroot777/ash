@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +19,12 @@ if (process.platform !== "darwin") {
   const mac = join(root, "desktop/macos");
   const temporary = realpathSync(mkdtempSync(join(tmpdir(), "navi-macos-recovery-")));
   const binary = join(temporary, "recovery-probe");
+  let preserveTemporary = false;
+  function sceneProcesses(directory) {
+    const normalized = directory.replace(/^\/private\/var\//, "/var/");
+    return execFileSync("/bin/ps", ["-axo", "pid=,command="], { encoding: "utf8" })
+      .split("\n").filter((line) => line.replaceAll("/private/var/", "/var/").includes(normalized));
+  }
   const impact = {
     survives: [{ id: "live", title: "可接管但未获保证的任务" }],
     resumes: [{ id: "team", title: "调度台回合" }],
@@ -39,8 +47,12 @@ if(${JSON.stringify(version)}==='next'&&!fs.existsSync(data+'/.recovery-retry-cl
  const database=new DatabaseSync(data+'/navi.db');database.exec('create table failed_migration (id text)');database.close();process.exit(7);
 }
 const event=value=>fs.appendFileSync(data+'/../events.jsonl',JSON.stringify(value)+'\\n');
-http.createServer((request,response)=>{
+const cleanupToken=fs.readFileSync(data+'/.recovery-cleanup-token','utf8');
+const server=http.createServer((request,response)=>{
  const url=new URL(request.url,'http://localhost');
+ if(url.pathname==='/__test_shutdown'&&request.headers['x-test-cleanup']===cleanupToken){
+  response.end('stopping');server.close(()=>process.exit(0));return;
+ }
  if(url.pathname==='/api/restart-impact'){
   if(!fs.existsSync(data+'/.recovery-retry-clear')){response.writeHead(500);response.end('{}');return}
   event({retryImpact:true,schema:url.searchParams.get('schema')});
@@ -57,8 +69,8 @@ http.createServer((request,response)=>{
  }
  response.end(JSON.stringify({ok:true,pid:process.pid,
  instance:{id:'restored',dataDir:data,codeDir:root,desktop:true,windowPort:Number(process.env.NAVI_WINDOW_PORT)}}));
-})
- .listen(Number(process.env.PORT),'127.0.0.1');`);
+});
+server.listen(Number(process.env.PORT),'127.0.0.1');`);
     writeFileSync(join(path, ".in-use"), "");
     writeFileSync(join(path, "version.txt"), version);
     return sealRuntime(path).id;
@@ -67,14 +79,31 @@ http.createServer((request,response)=>{
   async function scenario(options, operation) {
     const directory = mkdtempSync(join(temporary, "case-"));
     const fixtures = [];
+    const data = join(directory, "data");
+    const cleanupToken = randomUUID();
+    let port;
+    let retired = false;
+    const stopLaunched = async () => {
+      if (!sceneProcesses(directory).some((line) => line.includes("/server/dist/index.js"))) return;
+      const health = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(3000) }).then((response) => response.json());
+      assert.equal(realpathSync(health.instance.dataDir), realpathSync(data));
+      assert.ok(realpathSync(health.instance.codeDir).startsWith(`${realpathSync(data)}/.mac-runtimes/`));
+      const response = await fetch(`http://127.0.0.1:${port}/__test_shutdown`, {
+        headers: { "x-test-cleanup": cleanupToken }, signal: AbortSignal.timeout(3000),
+      });
+      assert.equal(response.status, 200);
+      assert.equal(await response.text(), "stopping");
+      for (let attempt = 0; attempt < 100 && sceneProcesses(directory).some((line) => line.includes("/server/dist/index.js")); attempt++) await sleep(30);
+      assert.equal(sceneProcesses(directory).some((line) => line.includes("/server/dist/index.js")), false);
+    };
     await withTestResources(async () => {
-      const data = join(directory, "data");
       const bundled = join(directory, "Navi.app/Contents/Resources/app");
       const oldSource = join(directory, "old");
       const nextId = makeRuntime(bundled, "next");
       const oldId = makeRuntime(oldSource, "previous", options.incompatible);
       const previous = join(data, ".mac-runtimes", oldId);
       mkdirSync(join(data, ".mac-runtimes"), { recursive: true });
+      writeFileSync(join(data, ".recovery-cleanup-token"), cleanupToken);
       cpSync(oldSource, previous, { recursive: true });
       writeFileSync(join(bundled, "../bundle-users.sh"), "exit 0\n");
       const database = new DatabaseSync(join(data, "navi.db"));
@@ -120,7 +149,9 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
       fixtures.push(fixture);
       for (let attempt = 0; attempt < 100 && !existsSync(ready); attempt++) await sleep(30);
       assert.ok(existsSync(ready));
-      const { pid, port } = JSON.parse(readFileSync(ready, "utf8"));
+      const readyInfo = JSON.parse(readFileSync(ready, "utf8"));
+      const { pid } = readyInfo;
+      port = readyInfo.port;
       writeFileSync(join(data, "navi.db.navi.lock"), JSON.stringify({ pid, token: "fixture-token" }));
       writeFileSync(join(data, ".mac-server.json"), JSON.stringify({ pid, bundleVersion: "previous" }));
       const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(NAVI_|ASH_)/.test(name)));
@@ -137,10 +168,18 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
       const backupFiles = () => existsSync(join(data, "backups")) && !options.backupFailure
         ? readdirSync(join(data, "backups")).filter((name) => name.endsWith(".db")) : [];
       const oldMetadata = JSON.parse(readFileSync(join(previous, ".handover.json"), "utf8"));
-      await operation({ run, pid, data, previous, next: join(data, ".mac-runtimes", nextId), oldMetadata, recorded, backupFiles });
+      await operation({ run, pid, data, previous, next: join(data, ".mac-runtimes", nextId), oldMetadata, recorded, backupFiles, stopLaunched });
     }, [
       async () => { for (const fixture of fixtures) await fixture.dispose(); },
-      () => rmSync(directory, { recursive: true, force: true }),
+      async () => {
+        try {
+          await stopLaunched();
+          for (let attempt = 0; attempt < 100 && sceneProcesses(directory).length; attempt++) await sleep(30);
+          assert.deepEqual(sceneProcesses(directory), [], "scene processes must exit before removing their runtime");
+          retired = true;
+        } catch (error) { preserveTemporary = true; throw error; }
+      },
+      () => { if (retired) rmSync(directory, { recursive: true, force: true }); },
     ]);
   }
 
@@ -348,6 +387,36 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
       assert.equal(realpathSync(join(data, ".mac-runtimes/current")), realpathSync(next));
     });
     console.log("✓ normal retry after rollback preflights, records and actually starts the new target instead of relabeling old code");
+    for (const headless of [false, true]) {
+      await scenario({}, async ({ run, data, previous, stopLaunched }) => {
+        const output = await run(0, { START_FAILED_MIGRATION: "1", ...(headless ? { HEADLESS_RECOVERY: "1" } : { RESTART_PAUSED: "1" }) });
+        assert.match(output, headless ? /HEADLESS_PAUSE_SAVED/ : /RECOVERY_NOTICE_AND_PAUSE/);
+        if (!headless) assert.match(output, /PAUSED_RESTART ready/);
+        const paused = JSON.parse(readFileSync(join(data, ".mac-runtime-paused.json"), "utf8"));
+        assert.equal(paused.previous, realpathSync(previous));
+        assert.equal(paused.version, "previous");
+        await stopLaunched();
+        const restarted = await run(0, { MODE: headless ? "paused-headless" : "paused-gui", ANSWERS: "" });
+        assert.match(restarted, /PAUSED_OUTCOME ready/);
+        assert.ok(restarted.includes(`PAUSED_SERVICE ${realpathSync(previous)} VERSION previous`), restarted);
+        if (!headless) assert.match(restarted, /PERSISTED_GATE blocked/);
+        assert.equal(realpathSync(join(data, ".mac-runtimes/current")), realpathSync(previous));
+        assert.equal(existsSync(join(data, ".mac-runtime-recovery.json")), false);
+        assert.equal(existsSync(join(data, ".mac-runtime-paused.json")), true);
+        const database = new DatabaseSync(join(data, "navi.db"));
+        assert.equal(database.prepare("select name from sqlite_master where name='failed_migration'").get(), undefined);
+        database.close();
+      });
+    }
+    for (const marker of ["not-json", JSON.stringify({ previous: "/untrusted/runtime", version: "previous", reason: "invalid" })]) {
+      await scenario({}, async ({ run, data, pid, recorded }) => {
+        writeFileSync(join(data, ".mac-runtime-paused.json"), marker);
+        assert.match(await run(1, { MODE: "paused-headless", ANSWERS: "" }), /PAUSED_OUTCOME failed/);
+        assert.equal(isPidAlive(pid), true);
+        assert.equal(recorded().some((event) => event.signal), false);
+      });
+    }
+    console.log("✓ durable recovery pause survives launcher and app restarts, preserves old version identity and fails closed on invalid markers");
     await scenario({}, async ({ run, data }) => {
       const output = await run(0, { ADOPTED_ROLLBACK: "1" });
       assert.match(output, /REFUSED_ADOPTED/);
@@ -357,5 +426,10 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
     });
     console.log("✓ forced switch migration failure restarts the preserved runtime and database; adoption prevents stale rollback");
     console.log("✓ Sparkle install and quit never force recovery; bundle occupancy and purpose changes retain their safety gates");
-  }, [() => rmSync(temporary, { recursive: true, force: true })]);
+    assert.deepEqual(sceneProcesses(temporary), [], "all detached recovery services must be retired");
+    console.log("✓ every detached test service self-exits and no scenario process remains after cleanup");
+  }, [() => {
+    if (preserveTemporary) console.error(`保留未清场的测试目录：${temporary}`);
+    else rmSync(temporary, { recursive: true, force: true });
+  }]);
 }
