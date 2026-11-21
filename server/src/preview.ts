@@ -67,15 +67,16 @@ async function stopPreviewExcept(
   taskId: string,
   reason: string | null,
   exceptGen: string | null,
-  preserveDevelopment = false,
+  preserveRunning = false,
 ): Promise<StopOutcome> {
   // readAnyPreview：**还在启动的那一趟也得收得掉**。记录一删，那一趟自己下一个检查点
   // 就会发现代号没了，杀掉自己起的进程、把链撤干净（见 runPreview 里的 abandoned）。
   const record = readAnyPreview(taskId);
   // 记录还没落盘的那一段也要停得掉（见 canceledGens）：标上记号，那一趟到下一个检查点
   // 就自己收摊，而且**永远不会写出记录**。
-  const marked = cancelDriving(taskId, exceptGen, preserveDevelopment);
-  if (preserveDevelopment && record?.purpose === "development") return stopOutcome({ stopped: true }, false);
+  const preserved = preserveRunning && record && (record.purpose === "development" || record.state !== "starting");
+  const marked = cancelDriving(taskId, preserved ? record.gen ?? exceptGen : exceptGen, preserveRunning);
+  if (preserved) return stopOutcome({ stopped: true }, false);
   const { closeTaskBrowser } = await import("./task-browser.js");
   await closeTaskBrowser(taskId, reason ?? "托管服务已停止或替换");
   let pending = await retryPreviewStops(taskId);
@@ -109,8 +110,7 @@ async function stopPreviewExcept(
  *
  * 「任务结束时回收」得真有个结束点，否则那一档就是永不回收——一个 dev server 一直占着
  * 端口，用户还以为选了「任务结束时回收」它自己会走。这条线的终点就是验收：走到这儿
- * 这个任务不会再动了。（打回重做那条路上关口也结束了，但那时预览由「任务重新开跑」
- * 那一下收掉，见 stopPreviewOnRerun。）
+ * 这个任务不会再动了。
  *
  * 调用点在**「点头之后」那一段开跑之前**，所以那一段又起的预览（用户特意编排的「验收完
  * 把线上环境开起来」）不受影响 —— 它是验收之后才有的东西。
@@ -128,9 +128,8 @@ export async function stopPreviewAtAccept(taskId: string): Promise<PreviewStopRe
   } catch (error) { return previewStopFailure(error); }
 }
 
-/** 任务又开跑了：回收普通预览，开发服务由智能体复用或替换。 */
 export async function stopPreviewOnRerun(taskId: string): Promise<void> {
-  await stopPreviewExcept(taskId, "任务重新开跑，旧预览指向的是上一版代码", null, true);
+  await stopPreviewExcept(taskId, "任务重新开跑，取消尚未完成的预览启动", null, true);
 }
 
 // 清扫：进程早死了的记录、以及 idle30 那一档到点的。启动时先扫一遍，之后每 5 分钟一次

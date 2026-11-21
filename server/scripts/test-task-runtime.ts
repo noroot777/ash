@@ -18,7 +18,7 @@ const { mountTaskRuntimeRoutes } = await import("../src/task-runtime-routes.js")
 const { mountPreviewRoutes } = await import("../src/preview-routes.js");
 const { mountFreePreviewRoutes } = await import("../src/free-workflow-preview.js");
 const { startPreview, stopPreview, stopPreviewAtAccept, stopPreviewOnRerun, isPreviewStarting } = await import("../src/preview.js");
-const { beginPreviewStart, endPreviewStart, previewStartCanceled } = await import("../src/preview-start-state.js");
+const { beginDriving, beginPreviewStart, endPreviewStart, previewStartCanceled } = await import("../src/preview-start-state.js");
 const { setTaskStatus } = await import("../src/status.js");
 const { readAnyPreview, alive } = await import("../src/preview-store.js");
 const { taskBrowserState, closeTaskBrowser } = await import("../src/task-browser.js");
@@ -405,10 +405,41 @@ try {
   }, workspace);
   assert.equal(ordinary.ok, true);
   await assert.rejects(() => startDevelopmentService("runtime", { command: "node ./service.cjs" }, async () => {}), /已有另一项预览服务/);
+  if (!ordinary.ok) throw new Error(ordinary.reason);
+  const ordinaryRecord = ordinary.record;
+  let ordinaryPage = await action({ action: "open" });
+  const ordinaryBrowser = ordinaryPage.state.id;
+  ordinaryPage = await action({ action: "fill", id: ordinaryBrowser, ref: ordinaryPage.targets.find(target => target.name === "成员姓名")!.ref, text: "续聊后保留" });
+  await action({ action: "click", id: ordinaryBrowser, ref: ordinaryPage.targets.find(target => target.name === "保存")!.ref });
+  const pendingOrdinary = beginPreviewStart("runtime");
+  beginDriving("runtime", ordinaryRecord.gen!);
+  try {
+    for (const previous of ["done", "paused", "failed", "canceled"] as const) {
+      await db.update(tasks).set({ status: previous }).where(eq(tasks.id, "runtime"));
+      await setTaskStatus("runtime", "running");
+      assert.equal(readAnyPreview("runtime")?.gen, ordinaryRecord.gen);
+      assert.equal(readAnyPreview("runtime")?.url, ordinaryRecord.url);
+      assert.equal(alive(ordinaryRecord.pid), true);
+      assert.equal(taskBrowserState("runtime")?.id, ordinaryBrowser);
+      assert.match((await action({ action: "snapshot", id: ordinaryBrowser })).text, /已保存：续聊后保留/);
+      assert.equal((await fetch(ordinaryRecord.url!)).status, 200);
+    }
+    assert.equal(previewStartCanceled(pendingOrdinary), true);
+    assert.equal(previewStartCanceled(ordinaryRecord.gen!), false);
+  } finally {
+    endPreviewStart("runtime", pendingOrdinary);
+    endPreviewStart("runtime", ordinaryRecord.gen!);
+  }
+  const { state: _state, ...legacyRecord } = ordinaryRecord;
+  writeFileSync(join(root, "runs", "runtime", "preview.json"), JSON.stringify(legacyRecord));
   await stopPreviewOnRerun("runtime");
+  assert.equal(alive(ordinaryRecord.pid), true);
+  assert.equal(readAnyPreview("runtime")?.gen, ordinaryRecord.gen);
+  assert.equal((await stopPreviewAtAccept("runtime")).stopped, true);
   assert.equal(readAnyPreview("runtime"), null);
-  if (ordinary.ok) assert.equal(alive(ordinary.record.pid), false);
-  console.log("PASS task runtime: service ownership/reuse/replacement, continuation and cold-start lifetimes, watch-only open/reconnect, takeover, persistent frames, acceptance and ordinary preview cleanup");
+  assert.equal(alive(ordinaryRecord.pid), false);
+  assert.equal(taskBrowserState("runtime")?.status, "closed");
+  console.log("PASS task runtime: service ownership/reuse/replacement, continuation and cold-start lifetimes, watch-only open/reconnect, takeover, persistent frames, ordinary preview continuation and acceptance cleanup");
 } finally {
   await uiBrowser?.close();
   await web?.close();
