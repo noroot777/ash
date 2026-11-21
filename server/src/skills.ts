@@ -71,8 +71,13 @@ const NATIVE_COMMANDS: Partial<Record<AgentType, Set<string>>> = {
   claude: new Set(["compact"]),
 };
 
-const isNativeCommandName = (agentType: string, name: string) =>
-  !!NATIVE_COMMANDS[agentType as AgentType]?.has(name) || Object.hasOwn(cliCommandCatalog(agentType), name);
+// claude 的 `/plan` 在 headless 下不是 CLI 认得的命令，由 Navi 切权限模式实现(plan-turn.ts)，不原样透传。
+const NAVI_HANDLED: Partial<Record<AgentType, Set<string>>> = {
+  claude: new Set(["plan"]),
+};
+
+const isNativeCommandName = (agentType: string, name: string) => !NAVI_HANDLED[agentType as AgentType]?.has(name)
+  && (!!NATIVE_COMMANDS[agentType as AgentType]?.has(name) || Object.hasOwn(cliCommandCatalog(agentType), name));
 
 /**
  * 这条消息是不是「CLI 原生命令」——即以某个原生命令打头(后面可以带参数,如

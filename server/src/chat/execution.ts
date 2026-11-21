@@ -15,6 +15,7 @@ import { agents, projects, users, tasks } from "../db/schema.js";
 import { taskFileRoot } from "../file-browser.js";
 import { withoutTurnIdentity } from "../turn-identity.js";
 import { ChatBoundaryError, readOnlyChatTool, watchChatWorkspace, type ChatWorkspaceObserver } from "./boundary.js";
+import { registerShutdownCleanup } from "../shutdown-resources.js";
 
 export interface ChatInvocation {
   text: string;
@@ -92,6 +93,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   }
   let handle: ReturnType<typeof executor.run> | undefined;
   let guard: ChatWorkspaceObserver | undefined;
+  let releaseShutdown: (() => void) | undefined;
   const abort = () => handle?.kill();
   try {
     // 观察者只记录变更、不中止（原因见 boundary.ts 顶部）；可归因的只读约束由下面
@@ -106,7 +108,9 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
       env: withoutTurnIdentity({ ...env }),
     });
     signal.addEventListener("abort", abort, { once: true });
-    process.once("exit", abort);
+    releaseShutdown = registerShutdownCleanup(
+      () => [{ kind: "chat", id: member.id, label: `聊天执行 ${member.agentType}`, projectId }], abort,
+    );
     const consume = async () => {
       let text = "";
       let exitStatus: number | undefined;
@@ -169,7 +173,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
     return { text, degraded, notice: guard ? changeNotice(await guard.settle()) : undefined };
   } finally {
     signal.removeEventListener("abort", abort);
-    process.removeListener("exit", abort);
+    releaseShutdown?.();
     try {
       handle?.kill();
       await handle?.cleanup?.();

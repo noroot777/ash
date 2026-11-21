@@ -20,6 +20,7 @@ import {
 } from "./channel.js";
 import { clearCredentials, domainUrl, isValidAppId, readCredentials, writeCredentials } from "./config.js";
 import { FeishuApi } from "./feishu/api.js";
+import { deepLinkWarning } from "./app-link.js";
 import { renderCard } from "./feishu/cards.js";
 import { confirmGroupCode, deleteGroup, editRefusal, GROUP_CHANGED, groupOf, groupsView, patchGroup } from "./groups.js";
 import { optionsError, patchOptions, readOptions } from "./meta.js";
@@ -63,6 +64,7 @@ async function statusOf(actor: Actor): Promise<FeishuStatus> {
     configError: read.kind === "broken" ? read.error : optionsError() ?? channelConfigError(),
     connection: connectionOf(),
     options,
+    linkWarning: deepLinkWarning(options.publicBaseUrl),
     usage: manage ? await quotaUsage() : null,
     instanceTag: instanceTag(),
     outbox: manage && appId ? await outboxCounts(appId) : null,

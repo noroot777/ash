@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { Group, Task, TaskListItem } from "@navi/shared";
 import { isUserFollowUp } from "@navi/shared";
 import { annotationBatchDisplayText } from "@navi/shared/page-annotation-display";
-import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
+import { usePreviewTab } from "../preview-workspace/previewTab.tsx";
 import { RuntimeAutoOpen } from "../task-runtime/RuntimeAutoOpen.tsx";
 import { PlanModeChip } from "./PlanModeChip.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
@@ -27,7 +27,7 @@ import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { replySend } from "./replySend.ts";
 import { replyDispatch } from "./replyDispatch.ts";
-import { launchPlan, saveDispatchTarget } from "./dispatchPlanActions.ts";
+import { saveDispatchTarget } from "./dispatchTargetActions.ts";
 import { replyDiscuss } from "./replyDiscuss.ts";
 import { dispatchNotes } from "./dispatchNotes.ts";
 import { withdrawalNotes } from "./suggestions/withdrawalNotes.ts";
@@ -98,8 +98,9 @@ export function TaskDetail({
   const confirmExecutorSwap = useExecutorGate();
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const [previewOpen, setPreviewOpen] = useState(false);
-  // 中间那一栏同一时刻只放一样东西：会话 / 预览指正 / 审查工作区。点开的文件、文件夹、diff
-  // 摊在右侧面板「查看」那一格（files/fileViewTab.tsx），会话和回复框一直留着。
+  // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区。点开的文件、文件夹、diff 摊在右侧面板
+  // 「查看」那一格（files/fileViewTab.tsx），预览指正长在「预览指正」那一格（preview-workspace/
+  // previewTab.tsx），会话和回复框一直留着。
   const fileView = useFileView(task.id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [markDoneOpen, setMarkDoneOpen] = useState(false);
@@ -115,7 +116,8 @@ export function TaskDetail({
   const { subagents, monitorTab, inspectors: stackInspectors, inspectorPolicy, liveMonitors, endedMonitorIds, free, runFacts, dispatchedFolds, runtime, leftDrawer, closeDrawers, drawers } = useTaskDrawers({
     task, allTasks, tasksReady, conversation,
   });
-  const { inspectors, reveal: fileViewReveal } = useFileViewTab(stackInspectors, fileView, TASK_FILE_TABS);
+  const { inspectors: fileViewInspectors, reveal: fileViewReveal } = useFileViewTab(stackInspectors, fileView, TASK_FILE_TABS);
+  const inspectors = usePreviewTab(fileViewInspectors, previewOpen);
   // 等你裁定时回复框顶上那一行（DisputeRulingDock）：选了一档，这一个框就成了那一步。
   const ruling = useDisputeRulingDock({ task, reviews: free.state?.reviews, known: !!free.state, onChanged: free.setState, notify });
   // 此刻能做什么（运行 / 停止 / 归档 / 重新排队 / 重跑上一回合 / 派验证）整份由服务端判，这里只照着画。
@@ -150,7 +152,7 @@ export function TaskDetail({
   // 智能体收回的建议任务：收回的那一刻留一句为什么（suggestions/withdrawalNotes.ts），跟尾注同一种小灰字。
   const asides = useMemo(() => [
     ...dispatchNotes(task.id, allTasks).map((note) => ({
-      key: `dispatch:${note.id}`, at: note.at, node: <DispatchNoteLine note={note} onOpen={onOpenTask} />,
+      key: `dispatch:${note.id}`, at: note.at, dispatchedTaskId: note.id, node: <DispatchNoteLine note={note} onOpen={onOpenTask} />,
     })),
     ...withdrawalNotes(task.dispatchWithdrawals).map((note) => ({
       key: note.key, at: note.at, node: <FootnoteLine footnote={note.footnote} placement="standalone" />,
@@ -191,10 +193,7 @@ export function TaskDetail({
 
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
-    if (open) {
-      setPreviewOpen(false);
-      closeDrawers();
-    }
+    if (open) closeDrawers();
     onReviewOpenChange?.(open);
   };
 
@@ -237,14 +236,12 @@ export function TaskDetail({
     try {
       if (!(await confirmExecutorSwap(task.id))) return;
       const result = await api.retryTurn(task.id, target);
-      // 审查档同一颗按钮有两种结果：上下文还在就接着做，上下文是空的
-      // （CLI 当时压根没起来）才重发整份任务书。别只说「已重跑」——
-      // 用户按之前看到的承诺是「继续」，退回从头跑时必须当面说清楚。
+      // 实际怎么发的（接回原会话说「接着做」，还是接不上改发完整指令）要到选会话那一步才定，服务端如实
+      // 写进会话和时间线；这里只报已经确定的那一半，不按事前分档替它下结论。
       notify(result.mode === "review"
-        ? result.resumed
-          ? "已从中断处继续这一轮审查"
-          : "上一轮没留下可接着做的上下文，已重新交代任务书跑这一轮"
-        : result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
+        ? result.resumed ? "已重试这一轮审查" : "上一轮没留下可接着做的上下文，已重新交代任务书跑这一轮"
+        : result.mode === "resend" ? "已重发上一条指令"
+        : result.mode === "continue" ? "已重试这一回合" : "已从中断处续跑");
       // 只重取会话正文。任务本身的 running 由 SSE 推过来 —— 这里再补一发
       // GET，回来的很可能还是重投前的 done，反手把跑起来的状态盖回去
       // （WorkspaceShell 按 onTaskUpdate 覆盖，没有版本门禁）。
@@ -309,7 +306,7 @@ export function TaskDetail({
   return (
     // 正文里提到的路径跟侧栏的生成物、文件树同一个出口：摊进「查看」那一格。InspectorHost 也在它里面——
     // 那一格里的 Markdown 再点别的文件，走的是同一条路，在原地换内容。
-    <TaskFileLinks taskId={task.id} onOpenFile={fileView.openFile} onOpenFolder={fileView.openFolder} onOpenError={notify}>
+    <TaskFileLinks taskId={task.id} onOpenFile={fileView.openFileAt} onOpenFolder={fileView.openFolder} onOpenError={notify}>
       <LeftDrawerProvider value={leftDrawer.api}>
       <InspectorHost
         contextKey={inspectorContextKey}
@@ -326,7 +323,7 @@ export function TaskDetail({
           runFacts,
           onOpenTask,
           onOpenReview: () => changeReviewOpen(true),
-          onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); closeDrawers(); },
+          preview: { open: previewOpen, onOpen: () => setPreviewOpen(true), onClose: () => setPreviewOpen(false) },
           onTaskUpdated: onTaskUpdate,
           onPatch: patch,
           onQueueChanged: (updatedTask) => {
@@ -374,8 +371,8 @@ export function TaskDetail({
                 onDelete={() => setDeleteOpen(true)}
                 onOpenTask={onOpenTask}
                 inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
-                planChip={<PlanModeChip task={task} onOff={(executorId) => {
-                  replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })("/plan off", [], { agent: "codex", executorId })
+                planChip={<PlanModeChip task={task} onOff={(agent, executorId) => {
+                  replySend({ task, allTasks, conversation, confirmExecutorSwap, notify })("/plan off", [], { agent, executorId })
                     .catch((reason) => notify(reason instanceof Error ? reason.message : String(reason)));
                 }} />}
                 notify={notify}
@@ -389,9 +386,7 @@ export function TaskDetail({
                   onTaskUpdate={onTaskUpdate}
                 />
               )}
-              {previewOpen ? (
-                <PreviewWorkspace key={task.id} taskId={task.id} onClose={() => setPreviewOpen(false)} />
-              ) : reviewOpen ? (
+              {reviewOpen ? (
                 <TaskReviewWorkspace
                   task={task}
                   allTasks={allTasks}
@@ -528,7 +523,6 @@ export function TaskDetail({
                         await api.answerTask(task.id, answer, input, attachments);
                         notify("已发送答复，任务正在续跑");
                       }}
-                      onLaunchPlan={launchPlan(task.id, notify)}
                       onDispatchTargetChange={task.mode === "single" && !task.parentId && !task.archived ? saveDispatchTarget(task, onTaskUpdate, notify) : undefined}
                       actions={replyActions.actions}
                       moreItems={replyActions.moreItems}

@@ -7,17 +7,17 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AuthState } from "@navi/shared";
 import { authApi } from "../lib/authApi.ts";
+import { setResourceRoots } from "../lib/resourceRoots.ts";
 import { ApiError } from "../lib/apiClient.ts";
 import { bindTaskReadsOwner } from "../lib/taskReadSync.ts";
 import { FirstRunWizard } from "../onboarding/FirstRunWizard.tsx";
-import { AuthShell } from "./AuthShell.tsx";
 import { ClaimPage } from "./ClaimPage.tsx";
 import { LoginPage } from "./LoginPage.tsx";
 import { PairPage, dropPairCode } from "./PairPage.tsx";
 import { ProjectJoinPage } from "./ProjectJoinPage.tsx";
 import { SetupWizard } from "./SetupWizard.tsx";
 import { AuthContext } from "./authContext.ts";
-import { NaviLoader } from "../brand/NaviLoader.tsx";
+import { AppStateScreen } from "../components/AppStateScreen.tsx";
 
 /** 领取链接与项目加入链接走真实路径,刷新后还在(邮件/群里发的就是这条 URL)。 */
 function routeOf(pathname: string): { kind: "claim" | "join"; token: string } | null {
@@ -31,6 +31,7 @@ function routeOf(pathname: string): { kind: "claim" | "join"; token: string } | 
 export function AuthGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [route, setRoute] = useState(() => routeOf(window.location.pathname));
   // 「确认身份」慢到该给个交代了没有。**首屏空窗期一律不渲染登录外壳** —— 那是整块
   // 深色品牌面板,而它多数时候只存在一个 RTT,闪出来再跳走比什么都不显示更吵(远程
@@ -42,8 +43,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = useCallback(async () => {
+    setRefreshing(true);
     try {
-      setState(await authApi.state());
+      const next = await authApi.state();
+      // 工作台只在拿到状态之后才渲染,所以附件/证据的同步判定一开画就认得本实例的目录。
+      setResourceRoots(next.resourceRoots);
+      setState(next);
       setError(null);
       return true;
     } catch (e) {
@@ -53,6 +58,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
       // 已经有旧状态时下面那块错误屏不出来(它只认 `!state`),所以失败必须**回给
       // 调用方**:等着这一次刷新换屏的人只有它自己知道该怎么收场。
       return false;
+    } finally {
+      setRefreshing(false);
     }
   }, []);
 
@@ -73,9 +80,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  // 本机自用模式没有邀请这回事:领取 / 加入链接一律回工作台。领取页因此要等身份状态到了
-  // 再出(多一个 RTT),否则本机模式下会先闪一下「领取你的 navi 账号」。
-  const ignoreRoute = route !== null && state?.localOnly === true;
+  // 模式固定自用(本机自用模式、Navi.app 起的服务)就没有邀请这回事:领取 / 加入链接一律回工作台。
+  // 领取页因此要等身份状态到了再出(多一个 RTT),否则会先闪一下「领取你的 navi 账号」。
+  const ignoreRoute = route !== null && (state?.localOnly === true || state?.desktopApp === true);
   useEffect(() => {
     if (ignoreRoute) {
       window.history.replaceState(null, "", "/");
@@ -97,34 +104,29 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (route?.kind === "claim" && state && !ignoreRoute) return <ClaimPage token={route.token} onDone={leaveRoute} />;
 
   if (!state) {
-    // 连不上是**持久态**,得把话说全,所以照旧给整屏外壳。等待则相反(见上)。
     if (error) {
       return (
-        <AuthShell>
-          <div className="auth-card auth-card--service">
-            <h1>连不上服务端</h1>
-            <p className="auth-note">{error}</p>
-            <button type="button" className="ui-button ui-button--primary" onClick={() => void refresh()}>
+        <AppStateScreen title={refreshing ? "正在连接 Navi" : "连不上 Navi"} busy={refreshing} alert={!refreshing}
+          actions={
+            <button type="button" className="ui-button ui-button--primary" disabled={refreshing} onClick={() => void refresh()}>
               重试
             </button>
-          </div>
-        </AuthShell>
+          }>
+          {!refreshing && <p>{error}</p>}
+        </AppStateScreen>
       );
     }
     // `role="status"` 不是装饰:这一屏只剩一行字,没有它读屏用户在这段等待里什么都听不到。
-    return waitedLong ? <div className="auth-booting" role="status"><NaviLoader size={32} />正在确认身份…</div> : null;
+    return waitedLong ? <AppStateScreen className="auth-booting" title="正在确认身份…" busy /> : null;
   }
 
   // 排在向导之前:没认出机主的时候,连「要不要首启」都不该由这个访客来答。
   // 本机自用模式没有配对这回事:走到这里的只能是同机反代转进来的请求,说清楚就够了。
   if (state.needsAccessKey && state.localOnly) {
     return (
-      <AuthShell>
-        <div className="auth-card auth-card--service">
-          <h1>只接受本机访问</h1>
-          <p className="auth-note">请在 Navi 所在的这台机器上直接打开。</p>
-        </div>
-      </AuthShell>
+      <AppStateScreen title="只接受本机访问">
+        <p>请在 Navi 所在的这台机器上直接打开。</p>
+      </AppStateScreen>
     );
   }
   if (state.needsAccessKey) return <PairPage onDone={refresh} />;

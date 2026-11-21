@@ -49,7 +49,7 @@ import {
   shouldAutoDispatchReview,
   withVerifyExecutor,
 } from "./review-policy.js";
-import { claimOwnTurn, continueWhenIdle, releaseTurn } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, continueWhenIdle, releaseTurn } from "./runs.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { advanceWorkflowFrom, settleFrom } from "./workflow-advance.js";
 import { applyRunFailPolicy } from "./workflow-steps.js";
@@ -153,7 +153,7 @@ export async function startVerifyRound(
   // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
   // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  const turn = holdingTurn ? claimOwnTurn(targetId, "dispatch") : null;
+  const turn = holdingTurn ? await claimOwnTurn(targetId, "dispatch") : null;
   if (holdingTurn && !turn) {
     throw new Error("任务回合正在进行，结束后再派验证");
   }

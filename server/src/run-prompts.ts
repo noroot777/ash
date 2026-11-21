@@ -21,9 +21,12 @@ export const AUTONOMY =
 // 产出质量规则**必须经过这里**：一条全新会话的第一条消息完全可能就是规划回合（用户先
 // `/plan on` 讨论方案、再 `/plan off` 动手），而动手那一轮走的是同一条会话的续跑、按
 // 「规则只贴一次」不会再贴 —— 不接这一处，「先规划后实施」整条路一个字都收不到。
-export const PLANNING_TURN = (craft: CraftContext, userText: string) =>
+// claude 的计划回合跑在 CLI 自己的 plan 权限模式里，计划要经 ExitPlanMode 交出来才会变成计划卡
+// （executors/claude-plan-gate.ts），所以多点一句。
+export const PLANNING_TURN = (craft: CraftContext, userText: string, agent?: AgentType) =>
   craftRulesFor(craft) + userText +
-  "\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。";
+  "\n\n本回合只讨论计划，不实施、不确认任务完成；等用户确认计划后再开始实施。" +
+  (agent === "claude" ? "计划定稿后调用 ExitPlanMode 提交，供用户确认。" : "");
 
 // Prefix for an agent invited into an existing task via @-mention. It joins in
 // the SAME working directory, so it should read the current state before acting.
@@ -41,6 +44,10 @@ export const COLLAB_INVITE =
 // preamble.
 export const RESUME_PROMPT =
   "继续：你上一次的运行被中断了（可能是服务重启、被手动停止或所在分组被暂停）。请从中断处接着完成这个任务，先简要说明你已做到哪一步、还差什么，然后继续推进直到完成。";
+// 「重试这一回合」在续聊上的接着做（task-retry-turn.ts）：崩掉那一回合已经在干活了，原话 CLI 早收下了，
+// 再发一遍原话会让它当成新指令从头来。
+export const RETRY_CARRY_ON_PROMPT =
+  "继续：上一回合中途异常中断了（比如上游连不上）。从中断处接着把上一条消息交代的事做完，已经做过的不要重做。";
 // Backend-initiated continue leaves this trace in the timeline (distinct from a
 // user reply), shown identically live (SSE) and on reload (.md).
 export const SYS_MARKER = "〔系统〕继续（从中断处）";

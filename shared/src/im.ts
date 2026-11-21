@@ -72,6 +72,8 @@ export interface FeishuStatus {
   configError: string | null;
   connection: FeishuConnection;
   options: ImOptions;
+  /** 存着的卡片深链地址在这台服务上为什么打不开（比如服务只听本机），没问题是 null。 */
+  linkWarning: string | null;
   /** 非管理员拿到 null。 */
   usage: ImUsage | null;
   /** 本机实例指纹（短），与「实例已上线」消息里同一串，用来发现两台机器连了同一个应用。 */

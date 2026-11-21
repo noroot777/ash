@@ -349,12 +349,6 @@ export async function applyRunFailPolicy(task: TaskRow, def: WorkflowDef | null)
 /**
  * 界面上那颗「重启预览」按钮的真身。**不属于「线在往前走」**：不动游标、不碰失败策略、
  * 不写任何账，就是把这一站的命令按原样再跑一次。
- *
- * 为什么非得有一颗手动的：预览在**任务一开跑**那一下就被收掉了（`stopPreviewOnRerun`，
- * 收在 `status.ts` 那个唯一入口），因为此刻新一版代码还没出来，留着旧页面只会让人对着
- * 上一版验新改动。而重新把它起来的机会只有一条：agent 亲口确认完成、这条线往前走到
- * 这一站。于是「用户问一句、agent 没确认完成」的轮次就成了洼地——预览被收了，线也没
- * 往前走，没有任何一条自动路径会再把它起来，用户只能盯着一个再也打不开的地址。
  */
 export type PreviewRestart =
   | { ok: true; url: string | null; port: number | null }

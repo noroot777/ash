@@ -26,6 +26,11 @@ export interface RunOpts {
   prompt: string;
   cliCommand?: CliCommand;
   cliState?: CliSessionState;
+  /**
+   * 这一回合是计划模式回合（`/plan`）：只读出计划、交给用户批准，不实施。codex 读 cliState.plan
+   * 选协作模式；claude 据此换权限参数（claude-plan-gate.ts）。由 orchestrator 判定，执行器不再自己猜。
+   */
+  planMode?: boolean;
   cwd: string;
   sessionId?: string; // resume an existing CLI session
   model?: string;
@@ -116,7 +121,7 @@ export interface RunHandle {
   // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
   // `unitToken` = 这一次运行的资源记号(executors/unit-token.ts):pid 认得出根,记号才认得出
   // 根死后仍在后台改文件的那些后代,所以它跟 pid 一样必须落库。
-  detached?: { pid: number; committed: () => number; unitToken?: string | null };
+  detached?: { pid: number; committed: () => number; unitToken?: string | null; checkpoint?: () => import("./output-checkpoint.js").OutputCheckpoint; checkpointAvailable?: () => boolean };
 }
 
 // 挂在执行器上的供应商(§5)。非空时启动 CLI 前注入 base_url + key,顶掉 CLI

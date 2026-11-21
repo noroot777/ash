@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { ArrowClockwise, ArrowCounterClockwise, ArrowUUpLeft, Cursor, PencilSimple, PushPin, Rectangle, Trash } from "@phosphor-icons/react";
 import type { PreviewAnnotation, PreviewAnnotationTool, PreviewPageContext } from "@navi/shared/page-annotation";
 import type { WorkspaceAnnotationEvent } from "./previewMessages.ts";
@@ -47,13 +47,20 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   const [notesOpen, setNotesOpen] = useState(true);
   const [drawing, setDrawing] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(true);
+  const rootRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const compact = window.matchMedia("(max-width: 760px), (max-height: 600px)");
     const collapse = () => { if (compact.matches) { setNotesOpen(false); setToolsOpen(false); } };
     collapse(); compact.addEventListener("change", collapse);
     return () => compact.removeEventListener("change", collapse);
   }, []);
-  const [expanded, setExpanded] = useState(true);
+  // 打开时多半在右侧面板那一格里：格子本身窄，意见栏先收着，别一打开就压住半张页面（第一条标注
+  // 出来时它自己会展开）。只看打开那一刻，之后放大、还原、拖宽都不再替人收。
+  useLayoutEffect(() => {
+    if ((rootRef.current?.getBoundingClientRect().width ?? Infinity) <= 760) setNotesOpen(false);
+  }, []);
+  // 打开时就在原地（右侧那一格），「放大预览」才铺满窗口。
+  const [expanded, setExpanded] = useState(false);
   const [canSelectParent, setCanSelectParent] = useState(false);
   const [page, setPage] = useState<PreviewPageContext | null>(null);
   const [error, setError] = useState("");
@@ -191,7 +198,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
     </footer>}
   </PreviewWorkspaceControls>;
 
-  return <PreviewWorkspaceLayout hasPreview={!!source} drawing={drawing} expanded={expanded} onExpandedChange={setExpanded} notesOpen={notesOpen} onToggleNotes={() => setNotesOpen(!notesOpen)}
+  return <PreviewWorkspaceLayout containerRef={rootRef} hasPreview={!!source} drawing={drawing} expanded={expanded} onExpandedChange={setExpanded} notesOpen={notesOpen} onToggleNotes={() => setNotesOpen(!notesOpen)}
     onClose={() => { review.dismiss(); onClose(); }} onKeyDown={(event) => {
       if (channel.mode === "annotate" && !batch.locked && isAnnotationUndo(event)) {
         event.preventDefault(); event.stopPropagation(); undo();

@@ -1,14 +1,14 @@
-import { useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { ArrowsIn, ArrowsOut, Browser, DotsSix, SidebarSimple, X } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { useFloatingPanel } from "./useFloatingPanel.ts";
 
-export function PreviewWorkspaceLayout({ children, hasPreview, drawing, expanded, onExpandedChange, notesOpen, onToggleNotes, onClose, onKeyDown }: {
+export function PreviewWorkspaceLayout({ containerRef, children, hasPreview, drawing, expanded, onExpandedChange, notesOpen, onToggleNotes, onClose, onKeyDown }: {
+  containerRef: RefObject<HTMLElement | null>;
   children: ReactNode; notesOpen: boolean; onToggleNotes: () => void; onClose: () => void;
   hasPreview: boolean; drawing: boolean; expanded: boolean; onExpandedChange: (expanded: boolean) => void;
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }) {
-  const containerRef = useRef<HTMLElement>(null);
   const expandRef = useRef<HTMLButtonElement>(null);
   const header = useFloatingPanel<HTMLElement>(hasPreview);
   useDismissable({ enabled: expanded, containerRef, restoreFocusRef: expandRef, closeOnOutside: false, onClose: () => onExpandedChange(false) });
@@ -16,7 +16,7 @@ export function PreviewWorkspaceLayout({ children, hasPreview, drawing, expanded
     aria-label="预览指正" onKeyDown={onKeyDown}>
     <header ref={header.ref} style={header.style} className={`preview-workspace-header${header.moving ? " is-moving" : ""}`}>
       {hasPreview && <button type="button" className="preview-workspace-drag" aria-label="移动预览操作栏（拖动或方向键）" {...header.handle}><DotsSix size={16} /></button>}
-      <Browser size={20} /><div><h2>预览指正</h2><p>在真实页面上点选、圈画，留下修改意见</p></div>
+      <Browser size={16} /><div><h2>预览指正</h2></div>
       <div className="preview-workspace-layout-actions">
         <button type="button" aria-expanded={notesOpen} onClick={onToggleNotes}><SidebarSimple size={16} />{notesOpen ? "收起意见栏" : "展开意见栏"}</button>
         <button ref={expandRef} type="button" aria-pressed={expanded} onClick={() => onExpandedChange(!expanded)}>

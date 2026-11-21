@@ -63,7 +63,7 @@ import { completeRegressionSettlement, regressionSettlementConclusion, type Sett
 import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } from "./review-continuation.js";
 import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { claimOwnTurn, releaseTurn, turnRole } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline, alertLine, receiptLine, noticeLine } from "./task-timeline.js";
 import { noteReviewInput, reviewInputHoldNow } from "./review-input-verdict.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
@@ -561,7 +561,7 @@ export async function startFreeReview(
   // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
   // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  const turn = holdingTurn ? claimOwnTurn(taskId, "dispatch") : null;
+  const turn = holdingTurn ? await claimOwnTurn(taskId, "dispatch") : null;
   if (holdingTurn && !turn) {
     throw new Error("任务回合正在进行，结束后再派审");
   }

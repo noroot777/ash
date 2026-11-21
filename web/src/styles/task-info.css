@@ -132,6 +132,21 @@
   margin-top: 6px;
 }
 
+/* 改到独立工作区：起点、合入两行，左边短标签，右边下拉 */
+.insp-move-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 12px;
+  color: var(--muted);
+}
+
+.insp-move-error {
+  margin: 6px 0 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .insp-inline-acts > .insp-cut {
   margin-right: auto;
   font-size: var(--t-xs);
@@ -204,74 +219,8 @@
   color: var(--muted);
 }
 
-/* 标签：一枚一枚的小块，「添加」是一个没框的输入 */
-.insp-kv .task-label-editor {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 0;
-}
-
-.insp-kv .task-label-editor > button {
-  display: inline-flex;
-  max-width: 100%;
-  height: 22px;
-  align-items: center;
-  gap: 2px;
-  border: 0;
-  border-radius: var(--r-sm);
-  background: var(--overlay);
-  padding: 0 4px 0 8px;
-  color: var(--ink);
-  font-size: var(--t-xs);
-  transition: background var(--dur-1) var(--ease-out);
-}
-
-.insp-kv .task-label-editor > button:hover:not(:disabled) {
-  background: var(--sel-bg);
-}
-
-.insp-kv .task-label-editor > button > svg {
-  width: 12px;
-  height: 12px;
-  color: var(--faint);
-}
-
-.insp-kv .task-label-editor > button:disabled {
-  padding-right: 8px;
-}
-
-.insp-kv .task-label-editor > button:disabled > svg {
-  display: none;
-}
-
-.insp-kv .task-label-editor > label {
-  display: inline-flex;
-  height: 22px;
-  align-items: center;
-  gap: 2px;
-  padding: 0 4px;
-  color: var(--muted);
-}
-
-.insp-kv .task-label-editor > label > svg {
-  display: none;
-}
-
-.insp-kv .task-label-editor input {
-  width: 4em;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  color: var(--ink);
-  font-size: var(--t-xs);
-}
-
-.insp-kv .task-label-editor input::placeholder {
-  color: var(--muted);
-}
+/* 标签：长相在 task-labels.css，这里只是贴着行、不加外框 */
+.insp-kv .task-label-editor { padding: 2px 0; }
 
 /* 调度的时间框 */
 .insp-kv .schedule-field {

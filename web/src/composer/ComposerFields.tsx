@@ -1,19 +1,20 @@
 import type { ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType, Group } from "@navi/shared";
-import { DotsThree, FolderSimple, GitBranch, Tag } from "@phosphor-icons/react";
+import type { RemoteBranch } from "@navi/shared/task-branch";
+import { DotsThree, Tag } from "@phosphor-icons/react";
 import { ComposerStarters } from "./ComposerStudio.tsx";
 import { ComposerPopover } from "./ComposerPopover.tsx";
 import { Dropdown } from "../components/Dropdown.tsx";
-import { Toggle } from "../components/ui.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import type { ComposerExecutorConfig } from "./executorOverrides.ts";
 import { ExecutorPickerField } from "./ExecutorPickerField.tsx";
+import { ComposerWorkspace } from "./ComposerWorkspace.tsx";
 
-const FOLLOW_PREREQUISITES = "跟着前置走（起跑时定）";
-
-/** 摆进新建卡片的几块：输入区下面那排入口、右下角的「谁来做」。 */
+/** 摆进新建卡片的几块：输入区下面那排入口（工作目录打头）、右下角的「谁来做」。 */
 export type ComposerFieldParts = {
-  options: { where: ReactNode; org: ReactNode; more: ReactNode };
+  options: { org: ReactNode; more: ReactNode };
+  /** 底排打头那一组：工作目录和 base 分支，常驻、不用点开。 */
+  workspace: ReactNode;
   executorTools: ReactNode;
 };
 
@@ -35,6 +36,7 @@ export function ComposerFields({
   savingWorktreeDefault,
   onSaveWorktreeDefault,
   branches,
+  remote,
   base,
   automaticBaseLabel,
   switchingBranch,
@@ -69,6 +71,8 @@ export function ComposerFields({
   savingWorktreeDefault: boolean;
   onSaveWorktreeDefault: () => void;
   branches: string[];
+  /** 远端分支（`origin/foo`）和「刷新远端分支」（没有远端时 refresh 为 null）。 */
+  remote: { branches: RemoteBranch[]; refresh: (() => void) | null; fetching: boolean };
   base: string;
   automaticBaseLabel: string;
   switchingBranch: boolean;
@@ -87,33 +91,10 @@ export function ComposerFields({
   onPickStarter: (body: string) => void;
   children: (parts: ComposerFieldParts) => ReactNode;
 }) {
-  const workspaceLabel = (on: boolean) => (on ? "独立 worktree" : "项目目录");
-  // 这颗开关每次新建任务都要面对一遍，所以把「本项目默认是什么」和「把这次的选择变成本项目
-  // 默认」就放在改它的地方 —— 手机端(mobile/src/app/new.tsx)早就是这样，桌面端此前只能翻到
-  // 设置页去改，用户只好每建一个任务手动拨一次。
-  const following = !!followPrerequisites && useWorktree;
-  const workspaceEditor = <>
-    <div className="composer-option-grid">
-      <label className="composer-toggle-field"><span>worktree</span><Toggle checked={useWorktree} onChange={onUseWorktreeChange} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} /></label>
-      <div className="composer-field"><span>base 分支</span><Dropdown label="base 分支" value={following ? "" : base}
-        options={[{ value: "", label: following ? FOLLOW_PREREQUISITES : automaticBaseLabel }, ...branches.map((branch) => ({ value: branch, label: branch, mono: true }))]}
-        disabled={!useWorktree || switchingBranch || following} filterable={branches.length > 6} filterPlaceholder="筛选分支…" placeholder={automaticBaseLabel} onChange={onBaseChange} /></div>
-      {following && <div className="composer-field"><span>合入分支</span><Dropdown label="合入分支" value=""
-        options={[{ value: "", label: followPrerequisites.mergeTarget ?? automaticBaseLabel, mono: !!followPrerequisites.mergeTarget }]}
-        disabled onChange={() => {}} /></div>}
-    </div>
-    {switchingBranch && <p className="studio-help" role="status">正在切换项目分支，完成后可创建任务。</p>}
-    <p className="studio-help composer-workspace-default">
-      {useWorktree === worktreeDefault
-        ? <>本项目默认就是「{workspaceLabel(worktreeDefault)}」，到「设置 → 项目设置 → 工作目录」可随时改。</>
-        : <>本项目默认是「{workspaceLabel(worktreeDefault)}」，这次只对本任务生效。
-          <button type="button" className="composer-workspace-default-save"
-            disabled={savingWorktreeDefault} onClick={onSaveWorktreeDefault}>
-            {savingWorktreeDefault ? "保存中…" : "设为本项目默认"}
-          </button></>}
-    </p>
-  </>;
-  const directory = isRepo && useWorktree ? "独立 worktree" : "项目目录";
+  const workspace = <ComposerWorkspace locked={locked} isRepo={isRepo} useWorktree={useWorktree} onUseWorktreeChange={onUseWorktreeChange}
+    worktreeDefault={worktreeDefault} savingWorktreeDefault={savingWorktreeDefault} onSaveWorktreeDefault={onSaveWorktreeDefault}
+    branches={branches} remote={remote} base={base} automaticBaseLabel={automaticBaseLabel} switchingBranch={switchingBranch}
+    onBaseChange={onBaseChange} followPrerequisites={followPrerequisites} />;
   const groupName = groups.find((group) => group.id === groupId)?.name;
   const organization = [groupName, labels.length > 0 && `${labels.length} 个标签`].filter(Boolean).join(" · ");
   // 「谁来做」：底排那颗三段胶囊。叫着人时它缩成一段（还看得见、改得了这条任务由谁跑），后面跟着被叫的人。
@@ -122,11 +103,7 @@ export function ComposerFields({
       fallbackType={executorType} override={executor} disabled={locked} compact={!!call} onChange={onExecutorChange} onEffortChange={onEffortChange} />
     {call}
   </div>;
-  // 输入区下面那排入口：图标 + 当前值，点开才是开关和下拉。名字和次序照旧。
-  const where = <ComposerPopover tone="opt" label="工作目录" disabled={locked} value={`${directory}${isRepo && useWorktree ? ` · ${following ? FOLLOW_PREREQUISITES : base || automaticBaseLabel}` : ""}`}
-    trigger={<>{isRepo && useWorktree ? <GitBranch size={14} /> : <FolderSimple size={14} />}<span>{directory}</span></>}>
-    {isRepo ? workspaceEditor : <p className="studio-help">当前项目不是 Git 仓库，直接使用项目目录。</p>}
-  </ComposerPopover>;
+  // 输入区下面那排入口：图标 + 当前值，点开才是下拉和输入。名字和次序照旧。
   const org = <ComposerPopover tone="opt" label="组织与标签" disabled={locked} value={organization || "无分组、无标签"} className={`is-org${organization ? " is-configured" : ""}`}
     trigger={<><Tag size={14} /><span>{organization || "分组与标签"}</span></>}>
     <div className="composer-option-grid">
@@ -143,7 +120,7 @@ export function ComposerFields({
   </ComposerPopover>;
   return (
     <>
-      {children({ options: { where, org, more }, executorTools })}
+      {children({ options: { org, more }, workspace, executorTools })}
       {availabilityMessage && <p role="status" className={"composer-agent-availability is-" + (availabilityTone ?? "warning")}>{availabilityMessage}</p>}
     </>
   );

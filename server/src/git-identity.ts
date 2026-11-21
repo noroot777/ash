@@ -86,6 +86,17 @@ export function redactRemoteUrl(raw: string): string {
   });
 }
 
+/**
+ * 一段文字（git 的报错、拼出来的说明、要发出去的地址）里每一个 URL 的**整段**认证信息都换成 `***`。比
+ * redactRemoteUrl 严：用户名的位置也能放令牌（`https://ghp_xxx@github.com/…`），所以不留用户名。
+ * 验收推送这一档对外的地址和报错走它（accept-push-destination.ts、git-accept-remote.ts）。
+ */
+export function redactUrlsIn(text: string): string {
+  // 认证段按 URL 语法认：`scheme://` 之后、主机之前最后一个 `@` 以前的全部。引号、冒号、`@` 都是密码里合法的字符
+  // （`@` 会被百分号编码，引号不会），所以只拿 `/` 和空白当边界 —— 宁可多抹（查询串里的 `@`），不能漏抹。
+  return text.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^\s/]*@/g, "$1***@");
+}
+
 /** `git remote -v` 会把同一个远端报两遍（fetch/push），按名字去重，取第一条。 */
 export async function readRemotes(root: string): Promise<GitRemoteInfo[]> {
   let stdout = "";

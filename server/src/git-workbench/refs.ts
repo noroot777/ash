@@ -6,6 +6,7 @@ import { getGitOverview } from "../git-overview.js";
 import { readScmStatus } from "../git-status.js";
 import { checkoutProjectBranch } from "../git-project-ops.js";
 import { ensureWorktreesIgnored, repoKey } from "../git.js";
+import { createTrackingBranch, removeCreatedBranch } from "../git-remote-branch.js";
 import {
   commitOid,
   exactRef,
@@ -31,10 +32,30 @@ export async function runRefAction(
     case "branch-create": {
       await refName(root, action.name);
       const target = await commitOid(root, action.target);
+      // 跟踪的远端分支要先核对在不在；起点仍按核对过的提交钉住。
+      if (action.track && !(await readRefs(root)).some((r) => r.kind === "remote" && r.name === action.track))
+        fail("远端分支不存在，请先 fetch");
+      if (action.checkout) requireClean(await readScmStatus(root));
+      if (!action.track) {
+        await git(root, action.checkout ? ["switch", "-c", action.name, target] : ["branch", "--", action.name, target]);
+        return true;
+      }
+      // 先建好带 upstream 的分支（两步各自可收回，createTrackingBranch），再切过去；没切过去就收回，
+      // 不留下「报了错却多了一条分支」的半截状态。切换报错时 HEAD 可能已经指过去了（切换后的钩子失败），
+      // 先看真实的检出状态：已经在它上面就照实说切过去了、分支留着（收回那一层也拒绝删正被检出的分支）。
+      const run = (args: string[]) => git(root, args);
+      await createTrackingBranch(run, action.name, target, `refs/remotes/${action.track}`);
       if (action.checkout) {
-        requireClean(await readScmStatus(root));
-        await git(root, ["switch", "-c", action.name, target]);
-      } else await git(root, ["branch", "--", action.name, target]);
+        await git(root, ["switch", action.name]).catch(async (error: unknown) => {
+          const head = await git(root, ["symbolic-ref", "-q", "HEAD"]).then((out) => out.trim(), () => "");
+          if (head !== `refs/heads/${action.name}`) {
+            await removeCreatedBranch(run, action.name, target);
+            throw error;
+          }
+          const detail = error instanceof Error ? error.message : String(error);
+          fail(`已建立并切到 ${action.name}（跟踪 ${action.track}），但切换之后报了错：${detail}`);
+        });
+      }
       return true;
     }
     case "branch-rename":

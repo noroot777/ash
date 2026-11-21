@@ -26,8 +26,7 @@ import {
 } from "@navi/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import { callWithMonitorResults } from "./monitor-results.js";
-import { MODE, RECURS, TASK_STAGE, planTaskShape, reviewChoiceOf, suggestionShape, suggestionWithdrawShape } from "../schemas.js";
-import { MAX_DISPATCH_PLAN_ITEMS } from "@navi/shared/dispatch-plan";
+import { MODE, RECURS, TASK_STAGE, reviewChoiceOf, suggestionShape, suggestionWithdrawShape } from "../schemas.js";
 import { legacyTeamAndDuet, whenLegacy } from "@navi/shared/legacy-modes";
 import { MAX_SUGGESTIONS_PER_CALL, MAX_SUGGESTIONS_PER_TASK } from "@navi/shared/dispatch-suggestion";
 
@@ -132,10 +131,11 @@ server.registerTool(
       confirmUnverified: z.boolean().optional().describe("返回 verify_not_run 时，只有用户知晓「独立验证尚未执行」且明确确认继续验收后才传 true；中途 human 关口会继续推进后续 verify，无需此参数"),
       gate: z.enum(["skip", "rerun"]).optional().describe("对「验收前置命令」的额外指令。不传 = 照常（跑过就沿用结果）；rerun = 这一按重跑；skip = 这次不跑直接合并。**只有用户明确要求才传**：跳过等于绕开他自己设的那道闸"),
       commit: z.boolean().optional().describe("这次合并落不落提交。不传 = 按项目设置（默认落）；false = 只把改动合进目标分支工作区并暂存、提交历史不动（要求目标分支正检出在项目目录且工作区干净，任务分支一律保留）。只有用户明确说「先别提交」才传"),
+      push: z.boolean().optional().describe("合完把目标分支推到它的远程（不强推）。合并前会先把远程的新提交快进进本地目标分支，跟任务撞冲突时照常交回任务去解。不传 = 不推。只有用户明确说「推送 / 推到远程」才传 true"),
     },
   },
-  async ({ taskId, confirmUnverified, commit, gate }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/accept`, { confirmUnverified, commit, gate })); }
+  async ({ taskId, confirmUnverified, commit, gate, push }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/accept`, { confirmUnverified, commit, gate, push })); }
     catch (e) { return fail(e); }
   },
 );
@@ -177,6 +177,27 @@ server.registerTool(
   },
   async ({ taskId, resumePrompt, directionToken, monitorReceipt }) => {
     return callWithMonitorResults(`/tasks/${taskId}/pause`, { resumePrompt, monitorReceipt }, directionToken);
+  },
+);
+
+server.registerTool(
+  "move_to_worktree",
+  {
+    title: "把本任务改到独立工作区",
+    description:
+      "用户要求给本任务换到某个分支（本地或远端）、某个提交的 worktree 时调用：由 Navi 建 navi/<id8> 工作区，验收会合并它、清理会收掉它。"
+      + "**不要自己执行 `git worktree add` 充当本任务的工作区**——那个目录不会被验收合并，也不会被清理。\n\n"
+      + "调用成功后结束本回合：Navi 在新目录里续跑同一个会话，开头会告诉你新目录在哪。项目目录里有未提交的改动、本任务已有独立工作区时会被拒，原因原样告诉用户。",
+    inputSchema: {
+      taskId: z.string().describe("当前正在执行的任务 id"),
+      base: z.string().min(1).describe("起点：本地分支、远端分支（origin/foo）或提交"),
+      mergeTargetBranch: z.string().optional().describe("验收合入的本地分支；不传按起点定"),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
+    },
+  },
+  async ({ taskId, base, mergeTargetBranch, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/worktree-move`, { base, mergeTargetBranch }, directionToken)); }
+    catch (e) { return fail(e); }
   },
 );
 
@@ -237,48 +258,32 @@ server.registerTool(
   },
 );
 
-server.registerTool(
-  "propose_dispatch",
-  {
-    title: "摆出派活单(派出一批任务前先给用户过目)",
-    description:
-      "想派出一批任务、而用户还没看过这批活时用它：回复框那一格变成派活单，用户可以换执行器、去掉某条、改一个接一个/同时。"
-      + "调完正常结束回合，任务落 paused 等用户。用户按「派出去」时由 Navi 照单建好、挂在本任务名下、交给调度，再把建好的清单(任务号、标题、交给谁)作为答复续上你的会话——**不要再自己建一遍**；"
-      + "用户写一句发回来时一条都没建，按他的话改完可以再摆一次。\n\n"
-      + "用户已经明确说过开工、或已经确认过这份清单，直接用 batch_create_tasks / create_task_chain 建，别再摆一遍。有提问在等时会被拒，摆了单就别再 ask_question。",
-    inputSchema: {
-      taskId: z.string().describe("当前正在执行的任务 id"),
-      tasks: z.array(planTaskShape).min(1).max(MAX_DISPATCH_PLAN_ITEMS).describe("按派出顺序排列；agentType/executorId 不填 = 交给本任务「派出去的活交给谁」的默认"),
-      order: MODE.optional().describe("serial=一个接一个(默认)；parallel=同时"),
-      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
-    },
-  },
-  async ({ taskId, tasks, order, directionToken }) => {
-    // 卡上每一行都摆着谁来审（缺省默认审查者），用户按「派出去」前能换、能关。
-    const items = tasks.map(({ reviewer, ...task }) => ({ ...task, review: reviewChoiceOf(reviewer) }));
-    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-plan`, { tasks: items, order: order ?? "serial" }, directionToken)); }
-    catch (e) { return fail(e); }
-  },
-);
-
 // 门槛写在说明里：每个回合都带着它，卡不住就每次回复挂两三条。
 server.registerTool(
   "suggest_dispatch",
   {
-    title: "挂出/收回可以另开的任务(不停下)",
+    title: "列出要派出去的活(挂在回复框顶上，用户一按就派)",
     description:
-      "只在你本来就要写「建议另开任务」时用：那件事该做、但不属于本任务。说明写好挂在用户回复框顶上，用户一按就派成新任务。"
-      + "不停任务，调完照常往下做、照常结束。拆自己的活用 propose_dispatch；顺手能做完的、想法没成形的不挂。新任务看不到这场对话，body 要自带上下文。\n\n"
-      + "挂上的一直留到用户派掉或点叉，不用重挂。后来不成立了（你自己做了、情况变了）用 withdraw 收回。",
+      "列出一批要派出去的活：挂在用户回复框顶上，用户可以换执行器、改说明、去掉某件，按「派出去」由 Navi 照着建好、挂在本任务名下——"
+      + "**不要再自己建一遍**。新任务看不到这场对话，body 要自带上下文。用户已经明确说过开工，就直接用 batch_create_tasks 建。\n\n"
+      + "wait 说清要不要等用户：\n"
+      + "· none(默认)：不等。该做但不属于本任务的活；调完照常往下做、照常结束，挂着的一直留到用户派掉或点叉，不用重挂。顺手能做完的、想法没成形的不挂。\n"
+      + "· done：等，派完就是本任务最后一步。调完正常结束回合，任务停住等用户；用户处理完由 Navi 把本任务结成完成、不叫醒你，建好的清单下一回合开头给你。要对用户说的话这一回合说完。\n"
+      + "· continue：等，你还要接着做(要用它们的结果)。用户处理完，建好的清单作为答复续上你的会话。\n"
+      + "等着时用户回一句话 = 没派的撤下(已派的随答复列给你)，按他的话改完可以再摆；等着时不能 ask_question，有提问在等时也摆不出要等的一批。后来不成立了用 withdraw 收回。",
     inputSchema: {
       taskId: z.string(),
       tasks: z.array(suggestionShape).max(MAX_SUGGESTIONS_PER_CALL).optional(),
+      order: MODE.optional().describe("parallel=同时(默认)；serial=一个接一个"),
+      wait: z.enum(["none", "done", "continue"]).optional().describe("要不要等用户，见上"),
       withdraw: z.array(suggestionWithdrawShape).max(MAX_SUGGESTIONS_PER_TASK).optional(),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken，原样传入"),
     },
   },
-  async ({ taskId, tasks, withdraw, directionToken }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-suggestions`, { tasks, withdraw }, directionToken)); }
+  async ({ taskId, tasks, order, wait, withdraw, directionToken }) => {
+    // 每一件都摆着谁来审（缺省默认审查者），用户按「派出去」前能换、能关。
+    const items = tasks?.map(({ reviewer, ...task }) => ({ ...task, review: reviewChoiceOf(reviewer) }));
+    try { return ok(await call("POST", `/tasks/${taskId}/dispatch-suggestions`, { tasks: items, order, wait, withdraw }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

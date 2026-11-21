@@ -193,8 +193,6 @@ export type ServerEvent =
       question: string | null;
       questionOptions: string[] | null;
       questionItems: QuestionItem[] | null;
-      /** 这一问是一张派活单时带上它；其余一律 null（换了题、答了、撤下都让卡跟着走）。 */
-      dispatchPlan?: import("./dispatch-plan.ts").DispatchPlan | null;
       answeredQuestion?: import("./questions.ts").QuestionRecord;
     }
   // 待发送消息托盘(排队/定时)有变化：入队、真的发出去了、被取消。托盘的真值只能

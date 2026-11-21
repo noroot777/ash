@@ -3,10 +3,12 @@ import {
   formatQuestionAnswers, legacyQuestionRecord, pairAnswerMessages, questionItems, questionOptionSelected, type QuestionRecord,
 } from "@navi/shared/questions";
 import { parseAttachmentText } from "@navi/shared/attachments";
+import { dispatchLaunchOf } from "@navi/shared/dispatch-suggestion";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import type { ConversationSource } from "./conversationModel.ts";
 import { MessageAttachments } from "./Attachments.tsx";
+import { DispatchNoteLine } from "./DispatchNoteLine.tsx";
 import { DeleteMessageButton, type DeletableItem } from "./MessageDelete.tsx";
 import { formatInstant } from "./utils.ts";
 import type { QuestionHistoryState } from "./useQuestionHistory.ts";
@@ -14,7 +16,7 @@ import type { QuestionHistoryState } from "./useQuestionHistory.ts";
 /** 会话里的一句真人输入（气泡）。答复卡按 `answerIds` / 出处认它对的是哪条问答记录。 */
 type QuestionMessage = { id: string; text: string; answerIds?: readonly string[]; sources?: ConversationSource[] };
 type Pairing = ReturnType<typeof pairAnswerMessages>;
-const HistoryContext = createContext<{ pairing: Pairing; error?: string; retry?: () => void }>({
+const HistoryContext = createContext<{ pairing: Pairing; error?: string; retry?: () => void; onOpenTask?: (taskId: string) => void }>({
   pairing: { paired: new Map(), unpaired: [] },
 });
 
@@ -24,25 +26,28 @@ const segmentOf = (sources: readonly ConversationSource[] | undefined) => {
 };
 
 /** 答复 ↔ 记录的配对，判据与服务端删除同一份（shared/questions.ts `pairAnswerMessages`）。 */
-function PairedHistory({ records, messages, error, retry, children }: {
-  records: QuestionRecord[]; messages: QuestionMessage[]; error?: string; retry?: () => void; children: ReactNode;
+function PairedHistory({ records, messages, error, retry, onOpenTask, children }: {
+  records: QuestionRecord[]; messages: QuestionMessage[]; error?: string; retry?: () => void;
+  onOpenTask?: (taskId: string) => void; children: ReactNode;
 }) {
   const pairing = useMemo(() => pairAnswerMessages(records, messages.map((message) => ({
     key: message.id, text: message.text, answerIds: message.answerIds, source: segmentOf(message.sources),
   }))), [records, messages]);
-  return <HistoryContext value={{ pairing, error, retry }}>{children}</HistoryContext>;
+  return <HistoryContext value={{ pairing, error, retry, onOpenTask }}>{children}</HistoryContext>;
 }
 
 /**
  * 会话里答过的气泡认记录用的那一层。记录本身由会话组件用 useQuestionHistory 取好传进来——同一份
  * 还要拿去判结算说明画不画（见 useQuestionHistory.ts 开头），这里不另读一份。
  */
-export function QuestionHistoryProvider({ history, messages, children }: {
+export function QuestionHistoryProvider({ history, messages, onOpenTask, children }: {
   history: QuestionHistoryState;
   messages: QuestionMessage[];
+  /** 派出记录那几句点了打开哪条任务；不给（远程视图）就只是一句话。 */
+  onOpenTask?: (taskId: string) => void;
   children: ReactNode;
 }) {
-  return <PairedHistory records={history.records} messages={messages} error={history.error} retry={history.retry}>{children}</PairedHistory>;
+  return <PairedHistory records={history.records} messages={messages} error={history.error} retry={history.retry} onOpenTask={onOpenTask}>{children}</PairedHistory>;
 }
 
 /** 引文里只放一行纯文字：多余的空白收掉，长了交给样式去截。 */
@@ -132,6 +137,7 @@ export function AnsweredQuestionMessage({ text, id, at, deletable, attachments =
 }) {
   const { pairing } = useContext(HistoryContext);
   const paired = pairing.paired.get(id);
+  if (paired && dispatchLaunchOf(paired)) return <DispatchLaunchLines record={paired} />;
   // 带了附件的答复，会话原文尾部是附件块（server attachmentsPrompt）：摘出来画成缩略图，答案只留正文。
   const parsed = parseAttachmentText(text);
   const record = (paired && !paired.deleted ? paired : undefined)
@@ -144,11 +150,22 @@ export function AnsweredQuestionMessage({ text, id, at, deletable, attachments =
   return <AnsweredQuestionCard record={record} deletable={target} attachments={[...parsed.paths, ...attachments]} />;
 }
 
+/**
+ * 挂着的活「派出去」那一下（shared dispatch-suggestion.ts `dispatchLaunchOf`）：每条新任务一句「开了新任务」，不画「你」的
+ * 气泡——那段答复只是交给智能体的回执。出自问答记录本身，远程视图、子任务删掉以后照样在。
+ */
+function DispatchLaunchLines({ record }: { record: QuestionRecord }) {
+  const { onOpenTask } = useContext(HistoryContext);
+  return <>{dispatchLaunchOf(record)!.map((task) => <DispatchNoteLine key={task.id} note={task} onOpen={onOpenTask} />)}</>;
+}
+
 /** 问答历史里有、会话里找不到出处的那些答复（不在这几条会话里），补成卡片放在末尾。 */
 export function QuestionHistoryRemainder() {
   const { pairing, error, retry } = useContext(HistoryContext);
   return <>
-    {pairing.unpaired.map((record) => <AnsweredQuestionCard key={record.id} record={record} />)}
+    {pairing.unpaired.map((record) => dispatchLaunchOf(record)
+      ? <DispatchLaunchLines key={record.id} record={record} />
+      : <AnsweredQuestionCard key={record.id} record={record} />)}
     {error && <p className="task-question-history-error" role="status">问答记录加载失败 <button type="button" onClick={retry}>重试</button></p>}
   </>;
 }

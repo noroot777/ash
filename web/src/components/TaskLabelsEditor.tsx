@@ -37,7 +37,7 @@ export function TaskLabelsEditor({
             { kind: "remove", label },
           )}
         >
-          {label}<X size={10} aria-hidden="true" />
+          <span>{label}</span><X size={10} aria-hidden="true" />
         </button>
       ))}
       {!disabled && (

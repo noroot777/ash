@@ -282,7 +282,7 @@ export function TeamView({
 
   return (
     // 正文里提到的路径跟侧栏的生成物、文件树同一个出口：摊进「查看」那一格（InspectorHost 也在里面）。
-    <TaskFileLinks taskId={task.id} onOpenFile={fileView.openFile} onOpenFolder={fileView.openFolder} onOpenError={notify}>
+    <TaskFileLinks taskId={task.id} onOpenFile={fileView.openFileAt} onOpenFolder={fileView.openFolder} onOpenError={notify}>
       <LeftDrawerProvider value={leftDrawer.api}>
       <InspectorHost
         contextKey={`team:${task.id}`}

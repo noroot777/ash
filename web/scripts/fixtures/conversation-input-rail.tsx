@@ -3,7 +3,7 @@
 // 跑法：npm -w web run test:conversation-input-rail-dom
 //
 // 会话外壳不用真的 ConversationFeed（它一挂就去拉接口），用的是同一套类名、同一个锚点助手、
-// 同一个 ConversationScrollControls：导航条、贴底、Q 的分发全是产品代码。
+// 同一个 ConversationScrollControls：导航条、贴底、S 的分发全是产品代码。
 import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ConversationScrollControls } from "../../src/components/ConversationScrollControls.tsx";
@@ -15,10 +15,10 @@ import "../../src/styles/global.css";
 type Item = { kind: "user" | "agent"; id: string; text: string; at?: string; bySystem?: boolean; short?: boolean };
 
 const REQUIREMENT = "原始需求：在会话左侧加一条输入导航\n指上去看全文，点一下跳过去";
-// 第一次追问是一条很长的多行输入：悬停卡片、Q 摊开的列表都得读得到它的结尾。
+// 第一次追问是一条很长的多行输入：悬停卡片、S 摊开的列表都得读得到它的结尾。
 const LONG_LAST_LINE = "第24段：摊开之后每一条都要看得到全文，不能只剩第一行。";
 const LONG_FOLLOW_UP = [
-  "第一次追问：Q 摊开全部",
+  "第一次追问：S 摊开全部",
   ...Array.from({ length: 23 }, (_, index) => `第${index + 1}段：摊开之后每一条都要看得到全文，不能只剩第一行。`),
   LONG_LAST_LINE,
 ].join("\n");
@@ -76,6 +76,7 @@ function Fixture() {
     onOpenSettings: () => noop(),
     onToggleCommands: () => noop(),
     onToggleTerminal: () => noop(),
+    onOpenRecall: noop,
   });
 
   return (

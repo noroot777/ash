@@ -33,7 +33,7 @@ import {
 } from "./free-review-reservations.js";
 import { reviewingRun } from "./free-review-round.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { claimOwnTurn, releaseTurn, whenTurnIdle } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline, noticeLine } from "./task-timeline.js";
 
 const AFTER_CURRENT_TURN = "当前执行回合正常结束后开始";
@@ -54,7 +54,7 @@ export async function releaseReservationAfterRuling(taskId: string, opts: { retr
   // 占住回合就没有执行回合能在「判完 → 开审」之间开跑；锁外读到的判据到消费那一刻可能已经
   // 不成立（第 2 轮审查）。消费那一侧（trigger=ruling）每次实际消费前还会重验资格，CAS 也
   // 比对资格列，几道互为兜底。
-  const turn = claimOwnTurn(taskId, "dispatch");
+  const turn = await claimOwnTurn(taskId, "dispatch");
   if (!turn) {
     // 占不到 ≠ 之后还会有一次结算：占着锁的可能正是已经结算完、只差放锁的那一轮，它的消费点
     // 早过了（第 2 轮审查实测：只写一句「等当前回合结束」，放锁后什么都不会发生）。登记到

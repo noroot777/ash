@@ -1,5 +1,6 @@
 import type { AgentEvent, ContextUsage } from "@navi/shared";
 import { goalRequest, isGoalExecution, isPlanImplementation, type CliCommand, type CliGoal, type CliSessionState } from "@navi/shared/cli-commands";
+import { PLAN_IMPLEMENT_TEXT } from "../plan-turn.js";
 
 type Transport = {
   request(method: string, params: Record<string, unknown>): Promise<any>;
@@ -109,7 +110,7 @@ export class CodexNativeCommands {
     if (command.name === "plan" && command.args && command.args !== "off") {
       const result = await this.transport.request("turn/start", {
         threadId: this.transport.threadId(), input: [{ type: "text", text: isPlanImplementation(command)
-          ? `${this.transport.prompt}\n\n用户已确认最新计划，现在按此计划开始实施。` : this.transport.prompt }],
+          ? `${this.transport.prompt}\n\n${PLAN_IMPLEMENT_TEXT}` : this.transport.prompt }],
         ...this.transport.turnOptions,
         collaborationMode: this.collaborationMode(isPlanImplementation(command) ? "default" : "plan"),
       });

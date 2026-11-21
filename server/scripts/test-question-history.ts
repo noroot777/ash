@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { formatQuestionAnswers, joinQuestionAnswer, questionKey, questionOptionSelected, legacyQuestionRecord } from "@navi/shared/questions";
+import { formatQuestionAnswers, joinQuestionAnswer, questionAnswerAvailability, questionKey, questionOptionSelected, legacyQuestionRecord } from "@navi/shared/questions";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "navi-question-history-"));
@@ -43,6 +43,19 @@ try {
   assert.deepEqual(record.answers, input.answers);
 
   assert.equal((await answerRequest("missing", { answer: "ok" })).status, 404);
+  for (const mode of ["single", "duet", "team"]) {
+    for (const status of ["backlog", "paused", "awaiting_review", "running", "queued", "idle", "done", "failed", "canceled"]) {
+      const taskId = `frozen-${mode}-${status}`;
+      await db.insert(tasks).values({ id: taskId, projectId: "p1", title: taskId, mode, status, archived: true,
+        question: "归档不能答复", createdAt: task.createdAt, updatedAt: task.updatedAt });
+      const frozen = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
+      assert.equal(questionAnswerAvailability(frozen), "archived");
+      const response = await answerRequest(taskId, { answer: "不能送出" });
+      assert.equal(response.status, 409, `${mode}/${status}:接口与两端卡片共用归档判据`);
+      assert.equal((await response.json()).archived, true);
+      assert.deepEqual((await db.select().from(tasks).where(eq(tasks.id, taskId)))[0], frozen, "拒绝不改问题或状态");
+    }
+  }
   assert.equal((await answerRequest("q1", { answer: 12 })).status, 400);
   assert.equal((await answerRequest("q1", { answers: ["", "  "] })).status, 400);
   assert.equal((await answerRequest("q1", { answers: ["one"] })).status, 400);

@@ -88,6 +88,9 @@ export function useConversation(
   // 状态，连发 N 次没有意义。
   const sessionsChain = useRef<Promise<unknown>>(Promise.resolve());
   const refreshQueued = useRef(false);
+  // 任务改到独立工作区（task-worktree-move.ts）时，会话行上的目录和分支在服务端被改写，但不会有
+  // 会话事件：按任务行上 useWorktree 变了没有来重读一次会话。
+  const seenIsolated = useRef<boolean | undefined>(undefined);
   // 出门顺序 = 读取顺序（上面那条链保证的），所以这个号大的那份一定更新。
   const sessionsSeq = useRef(0);
   const appliedSeq = useRef(0);
@@ -238,6 +241,7 @@ export function useConversation(
     // 排队也不跨任务——旧任务那几发的结果反正会被代号丢掉，没必要让新任务等它们。
     sessionsChain.current = Promise.resolve();
     refreshQueued.current = false;
+    seenIsolated.current = undefined;
     appliedSeq.current = 0;
     setSessions([]);
     setPersisted([]);
@@ -283,6 +287,11 @@ export function useConversation(
         if (event.event.kind === "session") {
           refreshSessions();
         }
+      }
+      if (event.type === "task.updated" && event.task.id === taskId && seenIsolated.current !== !!event.task.useWorktree) {
+        // 头一回看到这一列也重读一次：不知道上一个值，宁可多读一发。
+        seenIsolated.current = !!event.task.useWorktree;
+        refreshSessions();
       }
       // 别处（另一个窗口）删了这条会话里的消息：盘上已经改写过，整份重读。
       if (event.type === "conversation.redacted" && event.taskId === taskId) void load(true);

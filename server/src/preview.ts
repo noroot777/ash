@@ -15,6 +15,7 @@ export { beginPreviewStart, endPreviewStart, previewStartCanceled } from "./prev
 export const PREVIEW_CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / Navi 重启）";
 const IDLE_LIFE_MS = 30 * 60_000;
 const SWEEP_MS = 5 * 60_000;
+type PreviewStopOptions = { preserveRunning?: boolean; purpose?: "development" };
 
 export function isPreviewStarting(taskId: string): boolean {
   return starting.has(taskId) || readAnyPreview(taskId)?.state === "starting";
@@ -30,7 +31,11 @@ export async function startPreview(taskId: string, step: PreviewStep, cwd: strin
   const gen = registered ?? randomUUID();
   if (registered === undefined) beginDriving(taskId, gen, options?.purpose);
   try {
-    return await runPreview(taskId, step, cwd, gen, options, async () => (await stopPreviewExcept(taskId, null, gen)).stopped);
+    return await runPreview(taskId, step, cwd, gen, options, async () => {
+      const current = readAnyPreview(taskId);
+      if (options?.purpose === "development" && current && current.purpose !== "development") throw new Error("已有用户预览，请重试以复用当前预览");
+      return (await stopPreviewExcept(taskId, null, gen, { purpose: options?.purpose })).stopped;
+    });
   } finally {
     if (registered === undefined) endDriving(taskId, gen);
   }
@@ -39,8 +44,8 @@ export async function startPreview(taskId: string, step: PreviewStep, cwd: strin
 // 收掉一个任务的预览。收成了不往时间线写：预览开没开由预览键自己一直显示着，刷新后照样
 // 看得出，会话里再记一句「已回收」是同一件事说第二遍。reason 只用在没收干净时那句提醒里，
 // 传 null 连提醒也不写（调用方自己会把失败往上抛）。
-export async function stopPreview(taskId: string, reason: string | null): Promise<boolean> {
-  return (await stopPreviewExcept(taskId, reason, null)).stopped;
+export async function stopPreview(taskId: string, reason: string | null, options?: Pick<PreviewStopOptions, "purpose">): Promise<boolean> {
+  return (await stopPreviewExcept(taskId, reason, null, options)).stopped;
 }
 
 export async function stopPreviewForWorktreeCleanup(taskId: string): Promise<boolean> {
@@ -67,17 +72,27 @@ async function stopPreviewExcept(
   taskId: string,
   reason: string | null,
   exceptGen: string | null,
-  preserveDevelopment = false,
+  options: PreviewStopOptions = {},
 ): Promise<StopOutcome> {
+  const { preserveRunning = false, purpose } = options;
   // readAnyPreview：**还在启动的那一趟也得收得掉**。记录一删，那一趟自己下一个检查点
   // 就会发现代号没了，杀掉自己起的进程、把链撤干净（见 runPreview 里的 abandoned）。
   const record = readAnyPreview(taskId);
   // 记录还没落盘的那一段也要停得掉（见 canceledGens）：标上记号，那一趟到下一个检查点
   // 就自己收摊，而且**永远不会写出记录**。
-  const marked = cancelDriving(taskId, exceptGen, preserveDevelopment);
-  if (preserveDevelopment && record?.purpose === "development") return stopOutcome({ stopped: true }, false);
+  const preserved = record && ((purpose && record.purpose !== purpose)
+    || (preserveRunning && (record.purpose === "development" || record.state !== "starting")));
+  const marked = cancelDriving(taskId, preserved ? record.gen ?? exceptGen : exceptGen, { preserveDevelopment: preserveRunning, purpose });
+  if (preserved && !purpose) {
+    if (marked) bus.publish({ type: "task.review", taskId });
+    return stopOutcome({ stopped: true }, false);
+  }
   const { closeTaskBrowser } = await import("./task-browser.js");
   await closeTaskBrowser(taskId, reason ?? "托管服务已停止或替换");
+  if (preserved) {
+    if (marked) bus.publish({ type: "task.review", taskId });
+    return stopOutcome({ stopped: true }, marked > 0);
+  }
   let pending = await retryPreviewStops(taskId);
   if (!record) {
     if (!marked) return stopOutcome(pending, false);
@@ -109,8 +124,7 @@ async function stopPreviewExcept(
  *
  * 「任务结束时回收」得真有个结束点，否则那一档就是永不回收——一个 dev server 一直占着
  * 端口，用户还以为选了「任务结束时回收」它自己会走。这条线的终点就是验收：走到这儿
- * 这个任务不会再动了。（打回重做那条路上关口也结束了，但那时预览由「任务重新开跑」
- * 那一下收掉，见 stopPreviewOnRerun。）
+ * 这个任务不会再动了。
  *
  * 调用点在**「点头之后」那一段开跑之前**，所以那一段又起的预览（用户特意编排的「验收完
  * 把线上环境开起来」）不受影响 —— 它是验收之后才有的东西。
@@ -128,9 +142,8 @@ export async function stopPreviewAtAccept(taskId: string): Promise<PreviewStopRe
   } catch (error) { return previewStopFailure(error); }
 }
 
-/** 任务又开跑了：回收普通预览，开发服务由智能体复用或替换。 */
 export async function stopPreviewOnRerun(taskId: string): Promise<void> {
-  await stopPreviewExcept(taskId, "任务重新开跑，旧预览指向的是上一版代码", null, true);
+  await stopPreviewExcept(taskId, "任务重新开跑，取消尚未完成的预览启动", null, { preserveRunning: true });
 }
 
 // 清扫：进程早死了的记录、以及 idle30 那一档到点的。启动时先扫一遍，之后每 5 分钟一次

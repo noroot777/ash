@@ -4,7 +4,7 @@ import { hasCliGoalHold } from "@navi/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, groups, queueAdvanceIntents, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { claimOwnTurn, freezeStartingTurn, releaseTurn, stopTask } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, freezeStartingTurn, releaseTurn, stopTask } from "./runs.js";
 import type { TurnIdentity } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
@@ -236,7 +236,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     // (第 5 轮审查确定性复现)。claimOwnTurn 是同步的内存原子操作,在临界区里直接
     // **认领**所有权:抢到才落 queued,续跑带 turnHeld 进场;抢不到(占用方多半是
     // 刚进来的旁路追问)记账,等它 releaseTurn 后回调补办这次推进。
-    const turn = claimOwnTurn(candidate.id);
+    const turn = await claimOwnTurn(candidate.id);
     if (!turn) {
       deferQueueAdvance(queueId);
       return null;

@@ -11,7 +11,7 @@ import { NativeWorkTrace } from "./native-work.js";
 import { childActivity } from "./native-agent-activity.js";
 import { ClaudeWriteLedger, soleReceipt } from "./tool-writes.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
-import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
+import { spawnAgent, spawnErrorMessage, forceFinishOnExit, killChild } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
@@ -28,6 +28,7 @@ import { ClaudeRequestTimer } from "./request-timing.js";
 import { claudeNaviMcpProblem } from "./navi-mcp-confirm.js";
 import type { ClaudeNaviMcpInjection } from "./navi-mcp-inject.js";
 import { claudeApiStatus, modelFailureOf } from "./model-failure.js";
+import { PLAN_HANDOFF_TOOLS } from "./claude-plan-gate.js";
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
 // 流要一直开着;只有进程真的没了才 done。
@@ -102,7 +103,7 @@ async function* claudeStreamEvents(
   // the model's output. With partial streaming ON, the complete `assistant`
   // message that trails the deltas is used ONLY for tool_use — replaying its text
   // would duplicate everything the deltas already streamed.
-  const events = eventQueue({ images, activity: new NativeActivityBuffer(), coalesce: { text: 40 } });
+  const events = eventQueue({ child, images, activity: new NativeActivityBuffer(), coalesce: { text: 40 } });
   // 重放水位之前那段输出时(见下面 `consumed`)一律静音:那些话上一个 navi 进程已经说过了。
   // 只有最后一个回合结尾推出的那几条要留着 —— 它们决定接回之后收不收台,见 `ending`。
   let replaying = false;
@@ -231,6 +232,9 @@ async function* claudeStreamEvents(
         if (block.type === "tool_result") background.toolResult(block.tool_use_id, block.is_error === true);
         // 子智能体写的文件同样是这个任务写的（见 tool-writes.ts）。
         if (block.type === "tool_use") writeLedger.toolUse(block.name, block.input, block.id);
+        // 子智能体改计划文件同样算数：交计划那一刻要看计划文件最近一次修改成没成（claude-plan-gate.ts）。
+        if (block.type === "tool_use") resident?.planGate?.noteToolUse(block);
+        if (block.type === "tool_result") resident?.planGate?.noteToolResult(block);
         if (block.type === "tool_result") {
           const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true, soleReceipt(ev));
           if (writes) push(writes);
@@ -241,6 +245,12 @@ async function* claudeStreamEvents(
           for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         }
       }
+      return;
+    }
+    // 只有计划模式回合会来（起跑带 `--permission-prompt-tool stdio`，见 claude-plan-gate.ts）。
+    // 重放里的请求上一代已经回过了，不再回 CLI；但交计划要照样记进计划闸的历史，否则接管后认不出它。
+    if (ev.type === "control_request") {
+      if (resident?.planGate) for (const event of resident.planGate.request(ev, replaying)) push(event);
       return;
     }
     if (ev.type === "control_response") {
@@ -257,6 +267,13 @@ async function* claudeStreamEvents(
     }
     if (ev.type === "system" && ev.session_id) {
       if (ev.subtype === "init" && !replaying) onInitialized();
+      // 计划回合以 CLI 自己报的权限模式为准：被 settings 之类顶成别的模式，就等于没拦着写文件，当场停下。
+      const planProblem = ev.subtype === "init" && !replaying ? resident?.planGate?.initProblem(ev.permissionMode) : null;
+      if (planProblem) {
+        push({ kind: "error", message: planProblem });
+        killChild(child);
+        return;
+      }
       // navi 的工具在不在,以 CLI 自己在 init 里报的为准(navi-mcp-confirm.ts)。只有注入过的那一回合
       // 才问:复用这份解析的别家 CLI 不注入 navi,它们清单里有没有 navi 不归这里说。
       if (ev.subtype === "init" && !replaying && naviMcp) {
@@ -357,6 +374,7 @@ async function* claudeStreamEvents(
       // text 必须照收,跳过就等于把唯一一句错误说明扔了(见 docs/incidents.md
       // 「空白回合」:404 model_not_found 整个被吞,用户只看到任务停着不动)。
       const synthetic = ev.message.model === "<synthetic>";
+      resident?.planGate?.noteAssistant(ev.message.content);
       let hadText = false;
       for (const block of ev.message.content) {
         if (block.type === "text") {
@@ -367,6 +385,8 @@ async function* claudeStreamEvents(
           // 才分得清「内置 Monitor」和「普通后台 Bash」。
           if (!replaying) claudeMonitors.toolUse(block.name, block.input, block.id);
           background.toolUse(block.name, block.id, block.input);
+          // 交计划、提问由权限闸换成计划卡 / 答题卡，这一步本身不再画成一次（被拒的）工具调用。
+          if (resident?.planGate && PLAN_HANDOFF_TOOLS.has(block.name)) continue;
           push(nativeWork.call(block.name, block.input, block.id)
             ?? { kind: "tool", name: block.name, detail: shortJson(block.input) });
           writeLedger.toolUse(block.name, block.input, block.id);
@@ -377,6 +397,7 @@ async function* claudeStreamEvents(
       flushText();
       for (const block of ev.message.content) {
         if (block?.type !== "tool_result") continue;
+        resident?.planGate?.noteToolResult(block);
         // 起手回执里那句 `expires in 20m` 是来源侧唯一说出**生效**期限的地方（入参那个
         // timeout_ms 只是请求值，claude 会自己钳）。见 claude-monitors.ts 的 toolResult。
         if (!replaying) claudeMonitors.toolResult(block.tool_use_id, block.content);

@@ -30,6 +30,7 @@ import { cpSync, createReadStream, existsSync, mkdirSync, readFileSync, renameSy
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readEnv } from "../../../scripts/env.mjs";
+import { sealRuntime } from "./runtime-store.mjs";
 
 // 升级 node：改这三行，sha256 取 https://nodejs.org/dist/<版本>/SHASUMS256.txt 里对应那一行。
 // ≥22.16 才有内置的 node:sqlite；shared 跑 .ts 源码还要默认开着的类型擦除。
@@ -145,6 +146,7 @@ const copies = [
   "scripts/start-detached.mjs",
 ];
 for (const rel of copies) cpSync(join(REPO, rel), join(APP, rel), { recursive: true, verbatimSymlinks: true });
+cpSync(join(HERE, "runtime-store.mjs"), join(APP, "scripts/runtime-store.mjs"));
 writeFileSync(join(APP, ".in-use"), "");
 // web 不进生产依赖，它那条 workspace 软链指向一个没有 package.json 的目录，留着只会让人误会。
 rmSync(join(APP, "node_modules", "@navi", "web"), { force: true });
@@ -161,3 +163,4 @@ if (smoke.status !== 0 || smoke.stdout.trim() !== NODE_VERSION) {
   die(`自检失败：自带的 node 加载不了 sqlite / node-pty / shared 源码\n${smoke.stdout}${smoke.stderr}`);
 }
 say(`✓ 自带运行时 ${NODE_VERSION}，产物与依赖已装进 ${APP}`);
+sealRuntime(APP);

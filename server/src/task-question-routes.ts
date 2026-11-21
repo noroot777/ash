@@ -15,9 +15,9 @@ import { checkChoiceQuestion, choiceQuestionRejection } from "./choice-question-
 import { recurrenceBreakerArmed } from "./review-recurrence-gate.js";
 import { turnRole } from "./runs.js";
 import { answerTask } from "./task-answer.js";
-import { setTaskQuestion, waitSlotTaken } from "./task-question.js";
-import { activeDispatchPlan, parseDispatchPlan } from "@navi/shared/dispatch-plan";
-import { DISPATCH_PLAN_BLOCKS_ASK } from "./dispatch-plan.js";
+import { setTaskQuestion } from "./task-question.js";
+import { waitingOnDispatch } from "./dispatch-suggestion.js";
+import { DISPATCH_WAIT_BLOCKS_ASK } from "./dispatch-suggestion-wait.js";
 import { NAVI_HEADERS, requestHeader } from "./request-headers.js";
 
 export function mountTaskQuestionRoutes(api: Hono): void {
@@ -96,9 +96,9 @@ api.post("/tasks/:id/ask", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team" && r.status !== "running")
     return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
-  // 同一时刻只有一样东西在等用户：这一回合已经摆了派活单，就不能再问（dispatch-plan-routes.ts 反过来也拦）。
-  if (activeDispatchPlan({ question: r.question, dispatchPlan: parseDispatchPlan(r.dispatchPlan) })) {
-    return c.json({ error: DISPATCH_PLAN_BLOCKS_ASK }, 409);
+  // 同一时刻只有一样东西在等用户：这一回合已经摆了一批派活在等，就不能再问（dispatch-suggestion-agent.ts 反过来也拦）。
+  if (waitingOnDispatch(r)) {
+    return c.json({ error: DISPATCH_WAIT_BLOCKS_ASK }, 409);
   }
   const askToken = requestHeader(c, NAVI_HEADERS.turnToken);
   if (r.mode !== "team" && r.activeTurnToken && askToken !== r.activeTurnToken) {
@@ -134,7 +134,7 @@ api.post("/tasks/:id/ask", async (c) => {
   });
   if (!asked) {
     const latest = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    if (latest && waitSlotTaken(latest, false)) return c.json({ error: DISPATCH_PLAN_BLOCKS_ASK }, 409);
+    if (latest && waitingOnDispatch(latest)) return c.json({ error: DISPATCH_WAIT_BLOCKS_ASK }, 409);
     return c.json({ error: "当前回合已经结束或已被引导，提问未写入" }, 409);
   }
   return c.json({

@@ -7,10 +7,9 @@
 //    报一句「已开始」——起没起来正是按这颗按钮唯一想知道的事，提前返回等于让用户点开
 //    一个打不开的地址才发现。
 // ② **任务在跑时灰掉**。那一刻代码改到一半，起出来的页面既不是上一版也不是下一版；
-//    何况下一次状态切换会立刻把它收掉（`stopPreviewOnRerun`），按了也白按。
 //    **就地验证轮不算**：那是旁路回合，只读工作区、给结论，不产出新一版代码——预览起出来
 //    的正是被验的那一版，而这恰恰是用户最想自己点开看一眼的时候。后端从来就放行
-//    （`restartTaskPreview` 没有 running 门禁），收预览那一路也已经为旁路回合让开
+//    （`restartTaskPreview` 没有 running 门禁），预览那一路也已经为旁路回合让开
 //    （server 的 review-turn.ts）。
 import { useState } from "react";
 import type { Task } from "@navi/shared";

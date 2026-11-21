@@ -16,13 +16,20 @@ import type { AuthState } from "@navi/shared";
 import "../../src/styles/global.css";
 import { AuthGate } from "../../src/auth/AuthGate.tsx";
 import { authApi } from "../../src/lib/authApi.ts";
+import { AppCrash, ErrorBoundary } from "../../src/components/ErrorBoundary.tsx";
 
 const params = new URLSearchParams(location.search);
+const mode = params.get("mode");
+if (params.get("theme") === "dark") document.documentElement.dataset.theme = "dark";
 const hold = params.get("delay") === "hold";
 const delay = hold ? 0 : Number(params.get("delay") ?? 0);
 
 // 自用模式:AuthGate 对它应当**整体透明**,直接渲染 children。
 const state: AuthState = { mode: "single", needsSetup: false, needsAccessKey: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false };
+if (mode === "local-only") {
+  state.needsAccessKey = true;
+  state.localOnly = true;
+}
 
 let realRequests = 0;
 const realFetch = window.fetch.bind(window);
@@ -30,7 +37,10 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   if (new URL(href, location.origin).pathname === "/api/auth/state") {
     realRequests += 1;
-    if (hold) {
+    if (mode === "unavailable" && realRequests === 1) {
+      return new Response(JSON.stringify({ error: "服务正在重启，请稍后再试。" }), { status: 503, headers: { "content-type": "application/json" } });
+    }
+    if (hold || (mode === "unavailable" && realRequests === 2)) {
       await new Promise((resolve) => { (window as unknown as { __releaseAuthState: () => void }).__releaseAuthState = () => resolve(undefined); });
     } else {
       // 模拟网络往返。快路径传 0:跟 AuthGate 的阈值定时器比的是页面定时器的到期先后,不看负载。
@@ -41,7 +51,15 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   return realFetch(input as never, init);
 };
 
-if (params.get("mode") === "probe-once") {
+function CrashProbe(): never {
+  throw new Error(`无法读取页面分块：https://navi.test/${"asset-".repeat(180)}.js`);
+}
+
+if (mode === "crash") {
+  createRoot(document.getElementById("root")!).render(
+    <ErrorBoundary fallback={(error) => <AppCrash error={error} />}><CrashProbe /></ErrorBoundary>,
+  );
+} else if (mode === "probe-once") {
   // 快照带个记号,好分辨每一次 `authApi.state()` 到底吃的是预热结果还是真请求。
   window.__naviAuthProbe = Promise.resolve({ ...state, homeDir: "/from-probe" });
   void (async () => {

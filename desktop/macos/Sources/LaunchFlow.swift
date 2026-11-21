@@ -17,8 +17,8 @@ extension BrowserWindowController {
   func showOffline(_ error: Error) {
     stopInstanceGuard()
     if NaviConfig.isLocal { connect(); return }
-    offlineView.show(title: "连不上 \(NaviConfig.baseURL.absoluteString)",
-                     detail: "\(error.localizedDescription)\n服务起来后会自动载入。",
+    offlineView.show(title: "连不上 Navi",
+                     detail: "\(error.localizedDescription)\n\(NaviConfig.baseURL.absoluteString)\n服务恢复后自动回到工作区。",
                      actions: [OfflineView.Action(title: "重试") { [weak self] in self?.loadHome() }])
     startHealthPolling()
   }
@@ -34,7 +34,7 @@ extension BrowserWindowController {
     }
     pendingStartingScreen?.cancel()
     let starting = DispatchWorkItem { [weak self] in
-      self?.offlineView.show(title: "正在启动 Navi 服务…", detail: NaviConfig.baseURL.absoluteString, busy: true)
+      self?.offlineView.show(title: "正在启动 Navi", detail: "就绪后自动回到工作区。", busy: true)
     }
     pendingStartingScreen = starting
     if !quietly { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: starting) }

@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { QuestionAnswerInput } from "@navi/shared/questions";
+import { questionAnswerAvailability, type QuestionAnswerInput } from "@navi/shared/questions";
 import type { Context } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -35,11 +35,12 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   const attachments = b.attachments?.length ? { attachments: b.attachments } : {};
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return c.json({ error: "not found" }, 404);
-  if (task.archived) return c.json({ error: "任务已归档，先取消归档再答复", archived: true }, 409);
+  const availability = questionAnswerAvailability(task);
+  if (availability === "archived") return c.json({ error: "任务已归档，先取消归档再答复", archived: true }, 409);
   const blocked = handoffBlockReason(task.handoff);
   if (blocked) return c.json({ error: blocked, handoff: true }, 409);
   if (!task.question) return c.json({ error: "该任务没有待答复的问题", status: task.status }, 409);
-  if (task.mode !== "team" && (task.status === "running" || task.status === "queued")) {
+  if (availability === "settling") {
     return c.json({ error: "提问回合还没结束,等任务落 paused 再答复", status: task.status }, 409);
   }
 
@@ -54,7 +55,7 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
 }
 
 /**
- * 这一问的答复该送给谁、算不算任务的执行回合（普通答复和派活单「派出去」共用，后者见 dispatch-plan-launch.ts）。
+ * 这一问的答复该送给谁、算不算任务的执行回合（普通答复和等着的那一批派活处理完共用，后者见 dispatch-suggestion-resolve.ts）。
  * `sideways` 见 deliverAnswer 里那段说明：不是任务执行的答复不占队列位。
  */
 export async function answerRouteFor(task: TaskRow) {

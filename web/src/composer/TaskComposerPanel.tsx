@@ -128,7 +128,7 @@ export function TaskComposerPanel({
   // 它什么时候刷新不归这里管，弹层上的提示不能等它。
   const [worktreeDefault, setWorktreeDefault] = useState(project.useWorktreeDefault);
   const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
-  const { branches, base, setBase, automaticLabel, switching, isSwitching } = useComposerBranches(project, notify);
+  const { branches, remoteBranches, refreshRemotes, fetchingRemotes, base, setBase, automaticLabel, switching, isSwitching } = useComposerBranches(project, notify);
   const [busy, setBusy] = useState(false);
   // 「创建并等前置」记在草稿里（已选的前置跟正文同生共死）：草稿里有它，启动方式就是它。
   const [otherLaunchMode, setLaunchMode] = useState<LaunchMode>("run");
@@ -428,6 +428,7 @@ export function TaskComposerPanel({
             savingWorktreeDefault={savingWorktreeDefault}
             onSaveWorktreeDefault={saveWorktreeDefault}
             branches={branches}
+            remote={{ branches: remoteBranches, refresh: refreshRemotes, fetching: fetchingRemotes }}
             base={shown ? shown.worktreeBase ?? "" : base}
             automaticBaseLabel={automaticLabel}
             switchingBranch={switching}
@@ -444,7 +445,7 @@ export function TaskComposerPanel({
               textareaRef.current?.focus();
             }}
           >
-          {({ options, executorTools }) => <>
+          {({ options, workspace, executorTools }) => <>
           <div className="studio-card">
           <ComposerCallDock calling={calling} onCancel={cancelCall} />
           <ComposerObjective body={body} textareaRef={textareaRef} autoFocus={!home}
@@ -463,13 +464,12 @@ export function TaskComposerPanel({
             <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending}
               error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
           </ImagePreviewGroup>
-          {/* 底排：附件、选项入口在左；谁来做、发送键守在右下角（和回复框一个落点）。
+          {/* 底排：附件、工作目录、选项入口在左；谁来做、发送键守在右下角（和回复框一个落点）。
               一行放不下时右边那一组整组换到下一行、仍靠右，不压缩、不叠到左边的入口上。 */}
           <footer className="composer-footer">
-            <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
-            <div className="composer-opts">{home
-              ? <>{options.where}<ComposerExpand onExpand={home.onExpand} /></>
-              : <>{options.where}{options.org}{options.more}</>}<ComposerShortcutHelp /></div>
+            <div className="composer-opts"><AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />{workspace}{home
+              ? <ComposerExpand onExpand={home.onExpand} />
+              : <>{options.org}{options.more}</>}<ComposerShortcutHelp /></div>
             <div className="composer-foot-run">
               {executorTools}
               <ComposerLaunchControl

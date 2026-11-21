@@ -3,6 +3,8 @@ import Sparkle
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var windowController: BrowserWindowController?
+  /// 窗口建出来之前就收到的 navi:// 链接（被链接拉起时，系统可能先递链接、后报启动完成）。
+  private var pendingLinks: [URL] = []
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     // 第一个 WKWebView 建出来之前：要先让旧 app 退出、把改名前的网页数据复制过来（见 LegacyIdentity）。
@@ -17,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     controller.showWindow(nil)
     NSApp.activate(ignoringOtherApps: true)
+    pendingLinks.forEach(controller.open(link:))
+    pendingLinks = []
     do { try LoginService.reconcileAtLaunch() } catch { NSAlert(error: error).runModal() }
     DispatchQueue.global(qos: .utility).async { DownloadTransaction.reclaimAbandoned() }
   }
@@ -79,6 +83,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
+  /// navi:// 链接（DeepLink）。
+  func application(_ application: NSApplication, open urls: [URL]) {
+    guard let controller = windowController else {
+      pendingLinks.append(contentsOf: urls)
+      return
+    }
+    urls.forEach(controller.open(link:))
+  }
+
+  @objc func toggleOtherDevices(_ sender: NSMenuItem) {
+    RemoteAccessSwitch.toggle(windowController)
+  }
+
   @objc func checkHostMcp(_ sender: Any?) {
     HostMcpSetup.check(window: windowController?.window)
   }
@@ -97,13 +114,20 @@ extension AppDelegate: NSMenuItemValidation {
     if item.action == #selector(toggleLoginService(_:)) {
       item.state = LoginService.isEnabled ? .on : .off
     }
+    // 只有本机那份才有「让不让别的设备进来」这回事：连别处的 navi 时 app 只是个窗口。
+    if item.action == #selector(toggleOtherDevices(_:)) {
+      item.state = NaviConfig.allowsOtherDevices ? .on : .off
+      // 在跑的服务没按这个勾起（ServedInstance）：如实写出来，点它就是按勾重启。
+      item.title = ServedInstance.networkPending ? "允许其他设备访问（重启服务后生效）" : "允许其他设备访问"
+      return NaviConfig.isLocal && !RemoteAccessSwitch.busy
+    }
     // 只有本机那份才有「替这台机器的 CLI 接 MCP」这回事。
     if item.action == #selector(checkHostMcp(_:)) { return NaviConfig.isLocal }
     // 只在有一次更新排着（等任务跑完、或上次没装成）时出现。
     if item.action == #selector(installPendingUpdate(_:)) {
       let gate = UpdateGate.shared
       item.isHidden = !gate.hasPending
-      item.title = gate.phase == .waiting ? "等任务跑完后安装更新…" : "安装更新…"
+      item.title = gate.pendingMenuTitle
       return gate.hasPending
     }
     return true
@@ -151,6 +175,7 @@ enum MainMenu {
     }
     menu.addItem(.separator())
     menu.addItem(item("登录时启动 Navi 服务", #selector(AppDelegate.toggleLoginService(_:))))
+    menu.addItem(item("允许其他设备访问", #selector(AppDelegate.toggleOtherDevices(_:))))
     menu.addItem(item("检查 Navi MCP 登记…", #selector(AppDelegate.checkHostMcp(_:))))
     menu.addItem(.separator())
     menu.addItem(item("隐藏 Navi", #selector(NSApplication.hide(_:)), "h"))

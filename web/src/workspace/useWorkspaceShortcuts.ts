@@ -9,7 +9,7 @@ import { createKeyChordSequence } from "../lib/keyChord.ts";
 import { hasOpenLayer } from "../lib/useDismissable.ts";
 import { GO_CHORD_KEYS, GO_CHORD_PREFIX, isGoChordKey } from "./goChord.ts";
 
-// enabled 只关**列表导航那几颗单键**（j/k/f/c/Shift+R/q 和铺开态的 Esc/Enter）：它们要么改选中行、
+// enabled 只关**列表导航那几颗单键**（j/k/f/c/Shift+R/s 和铺开态的 Esc/Enter）：它们要么改选中行、
 // 要么按在主工作区的按钮上，换了界面就没有落点。`G …` 一族和 R 相反 —— 它们的落点不靠当前界面
 // （`G …` 见 goChord.ts；R 打开「我说过的话」，点一句就跳进那个任务），所以排在 enabled 之前，
 // 聊天 / 助手 / 设置页照样认。护栏仍然有：在输入框里打字、命令面板开着、模态层盖着、带修饰键，一律不算数。
@@ -50,7 +50,9 @@ function hasBlockingLayer(): boolean {
 function previewOwnsNavigation(target: EventTarget | null): boolean {
   // Expanded preview covers the workspace even with focus on its opener. Compact preview
   // owns only its own events; its controls handle keys after this window capture listener.
-  return document.querySelector(".preview-workspace.is-expanded") !== null
+  // 预览指正那一格保活：藏起来的那份仍在 DOM 里，只认看得见的。
+  const expanded = document.querySelector(".preview-workspace.is-expanded");
+  return (expanded !== null && expanded.getClientRects().length > 0)
     || (target instanceof Element && target.closest(".preview-workspace") !== null);
 }
 
@@ -214,9 +216,9 @@ export function useWorkspaceShortcuts({
         clickVisibleRunAction();
         return;
       }
-      // Q 把会话左侧的输入导航摊开成列表（见 components/conversationInputNav.ts）。铺开态里
+      // S 把会话左侧的输入导航摊开成列表（见 components/conversationInputNav.ts）。铺开态里
       // 会话被盖在下面，摊开了也看不见，所以不认；眼下没有哪条会话挂着导航（新建面板、
-      // 还没有任何输入的会话）就原样放过这颗键。摊开之后再按 Q 由那张列表自己收：它是 role="menu"，
+      // 还没有任何输入的会话）就原样放过这颗键。摊开之后再按 S 由那张列表自己收：它是 role="menu"，
       // 上面的 hasBlockingLayer() 已经把这里整段挡掉了。
       if (event.key === CONVERSATION_INPUTS_SHORTCUT && !spreadOpen && toggleConversationInputs()) {
         event.preventDefault();

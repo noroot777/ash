@@ -25,6 +25,8 @@ import { tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import type { TaskRow } from "./task-store.js";
 import { questionWaitOrigin } from "./task-wait-ownership.js";
+import { waitingBatchReturned } from "./task-question-record.js";
+import { readSuggestions, sameColumns, serializedSuggestions, waitingBatchOf } from "./dispatch-suggestion.js";
 import { now } from "./util.js";
 
 type Turn = { system?: boolean; byBackend?: boolean; sideTurn: boolean };
@@ -50,14 +52,22 @@ export async function supersedeQuestion(snapshot: TaskRow): Promise<void> {
     const occupancy = snapshot.waitOwnership?.question?.occupancy;
     if (!current || current.waitOwnership?.question?.occupancy !== occupancy) return false;
     if ((await questionWaitOrigin(transaction, current)).kind !== "ordinary") return false;
+    // 等着的那一批跟这一问一起撤：建了任务的那几件已经写进这一轮的提示（`questionSupersededNote`），同一笔拿掉，
+    // 免得它们再读成待补交的回执、下一回合又交一遍。
+    const items = readSuggestions(current);
+    const batch = waitingBatchOf(items).length > 0;
     const updated = await transaction.update(tasks)
-      .set({ question: null, questionOptions: null, questionItems: null, updatedAt })
+      .set({
+        question: null, questionOptions: null, questionItems: null, updatedAt,
+        ...(batch ? { dispatchSuggestions: serializedSuggestions(items.filter((item) => item.wait === "none")), dispatchPlan: null } : {}),
+      })
       .where(and(
         eq(tasks.id, snapshot.id),
         eq(tasks.question, snapshot.question!),
         sameNullable(tasks.questionOptions, snapshot.questionOptions),
         sameNullable(tasks.questionItems, snapshot.questionItems),
         sameNullable(tasks.questionHistory, snapshot.questionHistory),
+        batch ? sameColumns(current) : undefined,
       ))
       .returning({ id: tasks.id });
     return updated.length > 0;
@@ -67,8 +77,11 @@ export async function supersedeQuestion(snapshot: TaskRow): Promise<void> {
 
 const QUOTE_LIMIT = 120;
 
-/** 跟着这一轮提示交给 agent：卡已经撤了，还要等答复就自己重新问。 */
-export function questionSupersededNote(question: string): string {
+/** 跟着这一轮提示交给 agent：卡已经撤了，还要等答复就自己重新问。等着的是一批派活时说清它们落到了哪、怎么再摆。 */
+export function questionSupersededNote(task: TaskRow): string {
+  const question = task.question!;
+  const batch = waitingBatchReturned(task, "仍然需要的话，按这条消息改完再用 suggest_dispatch 摆一次。");
+  if (batch) return `\n\n(Navi:你摆的那一批派活用户没有直接处理，而是发来了上面这条消息。${batch})`;
   const quoted = question.length > QUOTE_LIMIT ? `${question.slice(0, QUOTE_LIMIT)}…` : question;
   return `\n\n(Navi:你之前的提问「${quoted}」用户没有直接答复，而是发来了上面这条消息，那张问答卡已随之撤下。`
     + `这条消息没回答到它、你仍然需要用户拍板的话，就重新调用 ask_question。)`;

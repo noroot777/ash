@@ -32,10 +32,13 @@
   gap: 3px;
 }
 
-/* 第二行「新建」：新建任务占满这一行，右边一颗随手记 */
-.workspace-sidebar-make {
+/* 第二行工具条：左边四颗图标（任务列表 F、我说过的话 R、搜索 ⌘K、随手记），右端「新建任务」带字。
+   铺开时筛选胶囊夹在中间（自带 margin-right:auto）；不铺开时由新建任务自己的
+   margin-left:auto 顶到右端。窄侧栏里新建任务的文字按剩余宽度省略。 */
+.workspace-sidebar-tools {
   display: flex;
   height: 32px;
+  min-width: 0;
   align-items: center;
   gap: 3px;
   margin-top: 6px;
@@ -43,14 +46,15 @@
 
 .workspace-new-task {
   display: flex;
-  height: 32px;
+  height: 28px;
   min-width: 0;
-  flex: 1;
+  flex: 0 1 auto;
   align-items: center;
+  margin-left: auto;
   border: 0;
   border-radius: var(--r-md);
   background: transparent;
-  padding: 0 8px 0 0;
+  padding: 0 9px 0 0;
   color: var(--ink);
   font-size: var(--t-sm);
   font-weight: var(--w-regular);
@@ -61,7 +65,7 @@
 
 .workspace-new-task > svg {
   flex: 0 0 auto;
-  margin: 0 6px 0 7px;
+  margin: 0 5px 0 7px;
   color: var(--muted);
 }
 
@@ -75,18 +79,86 @@
 .workspace-new-task:hover { background: var(--hover-bg); }
 .workspace-new-task:active { background: var(--sel-bg); }
 
-/* 第三行「找」：筛选（保留项）靠左，搜索和任务列表靠右。筛选那排点 / 铺开后的胶囊自带
-   margin-right:auto，把两颗图标顶到右端。 */
-.workspace-sidebar-find {
+/* 手机上工具行最左那颗筛选键弹出来的菜单：长相沿用 .ui-icon-menu，每项右边带条数。 */
+.workspace-filter-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.workspace-filter-menu b {
+  flex: 1;
+  font-weight: var(--w-regular);
+}
+
+.workspace-filter-menu button.is-todo b { color: var(--amber); }
+
+.workspace-filter-menu button > span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+}
+
+.workspace-filter-menu button[aria-checked="true"] { background: var(--sel-bg); }
+
+/* 筛选生效时贴在任务树上方的那一行：说的是「列表被筛过」，点 × 回到全部。
+   不筛时不画；铺开 / 收起时它都在原位，下面的行不跟着跳。 */
+.workspace-filter-scope {
   display: flex;
-  height: 30px;
+  height: 26px;
   min-width: 0;
   align-items: center;
-  justify-content: flex-end;
-  gap: 3px;
-  margin-top: 10px;
-  padding-left: 4px;
+  gap: 7px;
+  margin-top: 8px;
+  padding: 0 3px 0 10px;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  --scope-dot: var(--faint);
 }
+
+.workspace-filter-scope > i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--scope-dot);
+}
+
+.workspace-filter-scope > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-filter-scope b {
+  color: var(--ink);
+  font-weight: var(--w-medium);
+}
+
+.workspace-filter-scope > button {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--faint);
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.workspace-filter-scope > button:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.workspace-filter-scope--todo { --scope-dot: var(--amber); }
+.workspace-filter-scope--run { --scope-dot: var(--accent); }
+.workspace-filter-scope--wait { --scope-dot: var(--faint); }
+.workspace-filter-scope--done { --scope-dot: var(--green); }
+.workspace-filter-scope--accepted { --scope-dot: var(--cyan); }
 
 /* 侧栏里的纯图标键：28 见方，平时次级色，指上去墨色。按下去的（聊天、助手开着、任务列表
    铺开着）也是墨色，不再染主色 —— 主色只留给状态。 */
@@ -195,8 +267,8 @@
 .color-theme-menu > button:focus-visible { background: var(--hover-bg); color: var(--ink); }
 .color-theme-menu > button[aria-checked="true"] { color: var(--ink); }
 
-/* 窄屏（手机）上列表和内容一次只给一样，铺开和收起都没有意义 */
+/* 窄屏（手机）上列表和内容一次只给一样，收起没有意义。铺开键不在这里藏：它和手机上的
+   筛选菜单由 WorkspaceSidebar 按 useNarrowScreen 二选一，筛选入口才不会被样式单独抹掉。 */
 @media (max-width: 720px) {
-  .workspace-spread-toggle,
   .workspace-sidebar-collapse { display: none; }
 }

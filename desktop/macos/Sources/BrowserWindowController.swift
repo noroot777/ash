@@ -17,6 +17,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private var guardProbing = false
   /// 页面因为端口换了人被撤下时停在哪个路由，自己那份回来后回到那里。
   private var resumeURL: URL?
+  /// 页面还没载进来时收到的 navi:// 链接要去的路由（DeepLink），下一次载页面时直接载到那里。
+  var pendingRoute: URL?
+  /// 收到的第几条 navi:// 链接：每条都要等服务就绪、认过人才落地，先到的回调晚回来时不许盖掉后点的那条（DeepLink）。
+  var linkSerial = 0
   /// 页面现在认的是哪一份服务（它的实例号已经作为 cookie 交给页面）。
   private(set) var boundInstance: String?
   /// 页面在的时候多久认一次人。测试把它调大，单独验导航那一道。
@@ -194,8 +198,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     beginHandoff()
     // 失败页、撤下后的空白页之后 webView.url 不是 navi 的，此时回到撤下前的路由或首页；正常情况下
     // 原地重载保住当前路由。
-    let target = [webView.url, resumeURL].compactMap { $0 }.first(where: NaviConfig.isSameOrigin) ?? NaviConfig.windowURL
+    let target = [pendingRoute, webView.url, resumeURL].compactMap { $0 }.first(where: NaviConfig.isSameOrigin) ?? NaviConfig.windowURL
     resumeURL = nil
+    pendingRoute = nil
     webView.load(URLRequest(url: target))
     startInstanceGuard()
   }
@@ -326,12 +331,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     loadHome()
   }
 
-  /// 正在换代码（UpdateGate 停了服务）：盖上一屏、不探活，闸放开时 UpdateGate 会叫 loadHome。
-  func showInstalling(_ note: String) {
+  /// 正在换代码（UpdateGate 停了服务）、或者正按新设置重启服务（RemoteAccessSwitch）：盖上一屏、不探活，
+  /// 办完的那一方会叫 loadHome。
+  func showInstalling(_ note: String,
+                      detail: String = "完成后自动回到工作区。") {
     stopHealthPolling()
     stopInstanceGuard()
     pendingStartingScreen?.cancel()
-    offlineView.show(title: note, detail: "装好后自动接上。接管得了的任务照常在跑；点了「现在装」的话，刚才列出的那些会被打断。", busy: true)
+    offlineView.show(title: note, detail: detail, busy: true)
   }
 
   /// 后台每 2 秒探一次 /api/health，自己那份通了就载回去 —— 服务也可能是别处（登录项、

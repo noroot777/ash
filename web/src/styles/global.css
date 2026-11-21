@@ -2,7 +2,9 @@
 @import "./controls.css";
 @import "./icon-button.css";
 @import "./select.css";
+@import "./task-labels.css";
 @import "./auth.css";
+@import "./app-state-screen.css";
 @import "./run-target-picker.css";
 @import "./slash-menu.css";
 @import "./mention-menu.css";
@@ -27,7 +29,7 @@
 @import "./task-detail.css";
 @import "./task-conversation.css";
 @import "./question-card.css";
-@import "./dispatch-plan.css";
+@import "./dispatch-target.css";
 @import "./execution-trace.css";
 @import "./motion-text.css";
 @import "./navi-brand.css";
@@ -474,25 +476,4 @@ code,
   letter-spacing: 0.01em;
   pointer-events: none;
   user-select: none;
-}
-
-/* 根错误边界的兜底页(components/ErrorBoundary.tsx)。 */
-.app-crash {
-  display: flex;
-  min-height: 100vh;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--ink);
-  font-size: 13px;
-}
-
-.app-crash pre {
-  max-width: min(720px, 90vw);
-  margin: 0;
-  color: var(--red);
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  white-space: pre-wrap;
 }

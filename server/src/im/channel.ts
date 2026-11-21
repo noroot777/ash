@@ -10,12 +10,10 @@
 //
 // 启动时先接管上一次运行没办完的（点了一半的按钮、收下没办的消息），再全量对账：对账要看到
 // 按钮已经放回去的卡，才不会把它当成办完了收起来。
-import { createHash } from "node:crypto";
-import { hostname } from "node:os";
 import type { FeishuConnection, ImConnectionState, ImHealthState, ImUsage } from "@navi/shared";
 import { bus } from "../bus.js";
-import { resolveNaviDbFile } from "../db/path.js";
 import { IS_PREVIEW_INSTANCE } from "../preview-instance.js";
+import { instanceTag } from "../instance-tag.js";
 import { isMultiUser } from "../auth/mode.js";
 import { getUser } from "../auth/store.js";
 import type { AppFetch } from "../auth/im-actor.js";
@@ -33,6 +31,7 @@ import { PairingCards } from "./pairing.js";
 import { QuotaMeter } from "./quota.js";
 import { Reconciler } from "./reconcile.js";
 import { RoomRelay } from "./relay.js";
+import { relinkStoredCards } from "./relink.js";
 import { SYSTEM_SCOPE } from "./scope.js";
 
 const FULL_SWEEP_MS = 10 * 60_000;
@@ -79,9 +78,7 @@ function cancelRetry(): void {
 // 「实例已上线」每个进程每个应用只发一次：断线重连不再发，省额度。
 const announced = new Set<string>();
 
-/** 本机实例的短指纹：主机名 + 库文件路径。两台机器连了同一个应用时，上线消息里能看出来。 */
-export const instanceTag = (): string =>
-  createHash("sha256").update(`${hostname()}\n${resolveNaviDbFile()}`).digest("hex").slice(0, 8).toUpperCase().replace(/^(.{4})/, "$1-");
+export { instanceTag };
 
 /** index.ts 在拿到单实例锁、路由就绪之后调一次（预览实例不调）。 */
 export function startFeishuChannel(input: { fetch: AppFetch; exclusive: boolean }): Promise<void> {
@@ -155,6 +152,9 @@ async function bringUp(): Promise<void> {
   if (!options.enabled) { gate = "disabled"; return; }
   (await quotaMeter()).setQuota(options.monthlyQuota);
   gate = "idle";
+  // 起服务时换过链接策略（只听本机 ⇄ 放开网络），存着的卡先按新策略重写、排上改卡，再让发件队列开跑。
+  // 出错不吞：吞了发件队列就会先把旧内容发出去 —— 抛给 restartFeishuChannel，通道记成失败、过一会儿整套重来。
+  await relinkStoredCards();
   running = assemble(read.credentials, host.fetch);
   running.ws.start();
   running.sender.start();

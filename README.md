@@ -37,7 +37,7 @@ Navi 管的不是某一个 AI 编程工具，而是管这些工具怎么干活�
 ## Mac 客户端
 
 <!-- navi-mac-download -->
-**[下载 Navi 0.2.1（20261120.005732）](https://github.com/noroot777/navi/releases/download/navi-mac-v0.2.1-20261120.005732/Navi-0.2.1-20261120.005732.dmg)**
+**[下载 Navi 0.3.0（20261121.004809）](https://github.com/noroot777/navi/releases/download/navi-mac-v0.3.0-20261121.004809/Navi-0.3.0-20261121.004809.dmg)**
 <!-- /navi-mac-download -->
 
 <!-- 标记之间由发版脚本（npm run release:mac）自动替换为 dmg 直链。 -->

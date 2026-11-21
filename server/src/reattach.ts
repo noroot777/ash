@@ -13,7 +13,7 @@ import type { RunHandle } from "./executors/types.js";
 import { db } from "./db/index.js";
 import { agents, freeReviewRuns, tasks, sessions } from "./db/schema.js";
 import {
-  bindTurnToken, claimOwnTurn, discardStartingRun, finalizeAbandonedRun, releaseTurn, trackRun,
+  bindTurnToken, claimOwnTurnWhenReady as claimOwnTurn, discardStartingRun, finalizeAbandonedRun, releaseTurn, trackRun,
   type Killable, type TurnIdentity,
 } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
@@ -29,6 +29,9 @@ import { sessionCliConfigDir } from "./auth/run-env.js";
 import { closeSessionTurns, markTurnActive } from "./session-turns.js";
 import { reconcileInterruptedTask } from "./task-reconcile.js";
 import { sessionLaunchCompact } from "./usage.js";
+import { runtimeEligibility, type RuntimeEligibility } from "./runtime-eligibility.js";
+import { preflightRuntimeHandover } from "./runtime-handover-preflight.js";
+import type { RuntimeCompatibility } from "./runtime-compatibility.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -52,9 +55,10 @@ export type RestartImpact = {
   resumes: { id: string; title: string }[];
   interrupted: { id: string; title: string; reason: string }[];
   mcpDisrupted: { id: string; title: string; pid: number }[];
+  runtimeHandover?: RuntimeEligibility;
 };
 
-export async function restartImpact(): Promise<RestartImpact> {
+export async function restartImpact(next?: Partial<RuntimeCompatibility>): Promise<RestartImpact> {
   const out: RestartImpact = { survives: [], resumes: [], interrupted: [], mcpDisrupted: [] };
   for (const t of await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]))) {
     const label = { id: t.id, title: t.title || t.id };
@@ -84,6 +88,10 @@ export async function restartImpact(): Promise<RestartImpact> {
   }
   const holders = await findMcpChannelHolders(out.survives.map((s) => s.pid));
   out.mcpDisrupted = out.survives.filter((s) => holders.has(s.pid));
+  if (process.platform === "darwin") {
+    out.runtimeHandover = await runtimeEligibility(out);
+    await preflightRuntimeHandover(out, next);
+  }
   return out;
 }
 
@@ -203,7 +211,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
           .where(and(eq(freeReviewRuns.taskId, task.id), eq(freeReviewRuns.status, "reviewing")))).at(0) ?? null
         : null;
       // claimedTurn 是外层那个 let(不是 const):下面接管失败的 catch 出口也要凭它放锁。
-      claimedTurn = claimOwnTurn(
+      claimedTurn = await claimOwnTurn(
         task.id, sess.role,
         restoredReview ? { run: restoredReview.id, round: restoredReview.round } : null,
       );

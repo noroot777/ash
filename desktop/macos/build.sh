@@ -19,7 +19,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$HERE/build"
 APP="$BUILD/Navi.app"
 # 给人看的版本。Sparkle 比的是下面的 CFBundleVersion。
-VERSION="0.2.1"
+VERSION="0.3.0"
 # CFBundleVersion 必须严格递增：账本记着这台机器上发过的最后一个号，新号一定比它大（规则见
 # scripts/build-number.mjs）。账本放在仓库的 git 公共目录里，各个 worktree 共用一本；不在仓库里构建时
 # 退回 build/ 下。
@@ -65,6 +65,7 @@ SPARKLE="$(node "$HERE/scripts/sparkle.mjs")"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+cp "$HERE/../../docs/logo/loader.svg" "$APP/Contents/Resources/loader.svg"
 
 swiftc -O -swift-version 5 -target arm64-apple-macos14.0 \
   -framework AppKit -framework WebKit -F "$SPARKLE" -framework Sparkle \
@@ -118,6 +119,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticTermination</key><false/>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>$BUNDLE_ID</string>
+      <key>CFBundleURLSchemes</key><array><string>navi</string></array>
+    </dict>
+  </array>
 $SPARKLE_KEYS
   <key>NSAppTransportSecurity</key>
   <dict>
@@ -132,6 +140,7 @@ PLIST
 # 签一遍，最后封整个 app。
 find "$APP/Contents/Resources/app/node_modules/node-pty/build/Release" -type f \( -name '*.node' -o -name spawn-helper \) \
   -exec codesign --force --sign - {} + 2>/dev/null
+node "$HERE/scripts/runtime-store.mjs" seal "$APP/Contents/Resources/app" >/dev/null
 codesign --force --sign - "$APP" 2>/dev/null
 codesign --verify --deep --strict "$APP"
 echo "✓ ${APP}（${VERSION} / ${BUILD_NUMBER}）"
@@ -142,15 +151,14 @@ case "${1:-}" in
     DEST_DIR="/Applications"
     [[ -w "$DEST_DIR" ]] || DEST_DIR="$HOME/Applications"
     osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
-    # 窗口退出要一会儿；服务和 agent 的 MCP 不随它退，install-app.sh 见到还有人在用就不装。
+    # 窗口退出要一会儿；install-app.sh 会停掉空闲服务，仍有任务或 MCP 在用旧包就不装。
     # 认的是可执行文件的真实路径（lsof 报解析后的路径），装在别名目录下、路径带特殊字符都认得出。
     GUI="$(cd "$DEST_DIR/Navi.app/Contents/MacOS" 2>/dev/null && pwd -P)/Navi" || GUI=""
     for _ in $(seq 1 50); do
       [[ -n "$GUI" ]] && lsof -nP -w -a -d txt -c Navi -F n 2>/dev/null | grep -qxF "n$GUI" || break
       sleep 0.2
     done
-    bash "$HERE/scripts/install-app.sh" "$APP" "$DEST_DIR"
-    open "$DEST_DIR/Navi.app"
+    bash "$HERE/scripts/install-app.sh" "$APP" "$DEST_DIR" --open
     ;;
   --dmg)
     bash "$HERE/scripts/make-dmg.sh" "$APP" "$BUILD/Navi.dmg"

@@ -256,6 +256,27 @@ export async function fetchProject(
   });
 }
 
+/**
+ * 只拉一条远端分支，把 `refs/remotes/<远端>/<分支>` 更新到远端此刻的样子。从远端分支开工的任务建出来
+ * 之前要先走这一步（task-branch-plan.ts），否则冻结的是本地上一次 fetch 时那一版。
+ *
+ * 不加锁：调用方（建任务）已经持着这个仓库的锁，冻结起点要跟它在同一段里做完。
+ */
+export async function fetchRemoteBranch(repoPath: string, remote: string, branch: string, projectId: string | null): Promise<void> {
+  const root = expandHome(repoPath);
+  const injection = await gitNetInjection(projectId);
+  const refspec = `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`;
+  try {
+    await exec("git", netArgs(root, injection, ["fetch", "--no-tags", "--end-of-options", remote, refspec]), netOptions(injection));
+  } catch (error) {
+    const reason = oneLine(gitError(error));
+    if (/could(?:n't| not) find remote ref/i.test(reason)) {
+      throw new ScmOperationError(`远端 ${remote} 上没有分支 ${branch}，请刷新远端分支后重选`, 400);
+    }
+    throw new ScmOperationError(`拉取远端分支 ${remote}/${branch} 失败：${reason}`, 409);
+  }
+}
+
 const PULL_ARGS: Record<PullStrategy, string[]> = {
   "ff-only": ["--ff-only"],
   merge: ["--no-rebase"],

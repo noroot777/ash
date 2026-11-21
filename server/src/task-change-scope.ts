@@ -52,10 +52,12 @@ export interface ChangeScopeTask {
   worktreeBase?: string | null;
   stage?: string | null;
   acceptedBaseCommit?: string | null;
+  /** false = 没有独立工作区（直接在项目目录里改）：本来就没有任务分支，不是「分支被清理了」。 */
+  useWorktree?: boolean | null;
 }
 
 export type ChangeScopeFailure =
-  | "not_git_repo" | "source_branch_missing" | "start_commit_unreadable" | "target_unresolved"
+  | "not_git_repo" | "no_own_workspace" | "source_branch_missing" | "start_commit_unreadable" | "target_unresolved"
   | "target_branch_missing" | "accepted_snapshot_unreadable" | "no_merge_base" | "base_conflict" | "base_unreadable";
 
 export type TaskChangeScope =
@@ -73,6 +75,7 @@ export type TaskChangeScope =
 /** 给人读的原因（审查提示里用；界面那份在 web/src/lib/branch-diff-reason.ts）。 */
 export const CHANGE_SCOPE_FAILURE_TEXT: Record<ChangeScopeFailure, string> = {
   not_git_repo: "项目不是 Git 仓库",
+  no_own_workspace: "任务没有独立工作区，改动直接落在项目目录里，没有任务分支可比",
   source_branch_missing: "任务分支不存在或已清理",
   start_commit_unreadable: "无法读取任务的开工提交",
   target_unresolved: "无法确定目标分支",
@@ -217,7 +220,7 @@ export async function taskChangeScope(repoPath: string, task: ChangeScopeTask): 
     // 判据是**本地分支还在不在**，同名 tag 不算（理由见 git.ts staleBaseFallback）。
     !settled && targetBranch ? commitOf(repo, `refs/heads/${targetBranch}`) : null,
   ]);
-  if (!head) return fail(targetBranch, "source_branch_missing");
+  if (!head) return fail(targetBranch, task.useWorktree === false ? "no_own_workspace" : "source_branch_missing");
   if (recorded && !start) return fail(targetBranch, "start_commit_unreadable");
   // 目标那一版读不到就停在这里，有没有开工点都一样；冻结的那一版读不到也不拿此刻的目标分支顶替 ——
   // 已合入的任务自己就在里面，会被整个扣没。

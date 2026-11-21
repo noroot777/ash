@@ -106,6 +106,7 @@ export async function checkPreviewControlShortcuts(page, draft) {
   assert.deepEqual(await shortcutActions(page), ["task:next", "task:fixture", "task:previous", "task:fixture"]);
   await page.evaluate(() => { window.workspaceShortcutActions = []; });
   await button("打开预览指正").click();
+  await button("放大预览").click();
   await button("还原预览").waitFor();
   await button("关闭预览指正").click();
   await page.locator("#preview-external-opener").focus();
@@ -113,6 +114,7 @@ export async function checkPreviewControlShortcuts(page, draft) {
   assert.deepEqual(await shortcutActions(page), ["task:next", "task:fixture"], "closing expanded preview restores workspace navigation");
   await page.evaluate(() => { window.workspaceShortcutActions = []; });
   await button("打开预览指正").click();
+  await button("放大预览").click();
   await button("还原预览").waitFor();
   console.log("preview keyboard scope: real window-capture shortcuts, external focus, both handles in expanded/compact views, draft retention and navigation after closing passed");
 }

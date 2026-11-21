@@ -12,7 +12,7 @@ import { inspectPortCommand, inspectProcessSync, killPidsCommand, listenerPidsSy
 // 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
 import { stampHumanActionToken } from "./auth/human-action-token.js";
 import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
-import { LOCAL_ONLY, LOCAL_ONLY_HOSTNAME, LOCAL_ONLY_REFUSAL } from "./local-only.js";
+import { LOCAL_ONLY, LOCAL_ONLY_HOSTNAME, SINGLE_ONLY, SINGLE_ONLY_REFUSAL } from "./local-only.js";
 import { CODE_DIR, DATA_DIR, REPO_DIR } from "./paths.js";
 import { recordListeningPort } from "./listening-port.js";
 import { guardMonitorHook } from "./monitor-hook-failsafe.js";
@@ -21,6 +21,10 @@ import { instanceBinding } from "./instance-binding.js";
 import { listenWindowPort } from "./window-port.js";
 import { responseCompression } from "./response-compression.js";
 import { mountPreviewOpenRoutes } from "./preview-access.js";
+import { runtimeHandoverGate } from "./runtime-handover-gate.js";
+import { startRuntimeGateway } from "./runtime-channel-gateway.js";
+import { runtimeAgentChannel } from "./runtime-agent-channels.js";
+import { markRuntimeAdoption } from "./runtime-recovery.js";
 
 let activeServer: ReturnType<typeof serve> | null = null;
 let startupComplete = false;
@@ -96,6 +100,7 @@ async function initializeServer() {
     ]);
 
   await ensureSchema();
+  markRuntimeAdoption();
   const { chatService } = await import("./chat/service.js");
   await chatService.recover();
   // 实例模式(自用 / 多人)要在任何路由被打之前读出来:同步派进程那条路只认
@@ -110,8 +115,8 @@ async function initializeServer() {
       import("./auth/context.js"),
     ]);
   let instance = await modeModule.instanceConfig();
-  if (LOCAL_ONLY) {
-    if (instance.mode === "multi") throw new Error(`${LOCAL_ONLY_REFUSAL}；这份数据已经是多人模式，不能以本机自用模式打开`);
+  if (SINGLE_ONLY) {
+    if (instance.mode === "multi") throw new Error(`${SINGLE_ONLY_REFUSAL}；这份数据已经是多人模式，不能以自用模式打开`);
     // 首启那一问的答案是开关已经给定的：直接落成自用，向导不出。
     if (instance.mode === "") {
       await modeModule.setInstanceMode("single", "");
@@ -283,6 +288,11 @@ async function initializeServer() {
     // 的那几条要先占上锁。排在审查对账之后：前置站没站稳要看审查链收拾完的现场。
     const { startPrerequisiteLaunches } = await import("./prerequisite-launch.js");
     await startPrerequisiteLaunches().catch((err) => console.error("[navi] 等齐就起补办失败（不影响启动）:", err));
+    // 派出去就算完成还欠着的收尾（dispatch-suggestion-settle.ts）：排在接回之后，在跑的回合先占上锁。
+    const { startLaunchDebtSweeps } = await import("./dispatch-suggestion-settle.js");
+    await startLaunchDebtSweeps().catch((err) => console.error("[navi] 派出去之后的收尾补办失败（不影响启动，每分钟再扫）:", err));
+    // 智能体登记了「改到独立工作区」、回合结束后还没来得及叫起下一回合就重启了的（task-worktree-move.ts）。
+    await (await import("./task-worktree-move.js")).recoverWorktreeMoves();
   }
   // navi MCP 登记自检。放在这里是因为它跟任务能不能交卷直接相关：缺了它 agent 干完活
   // 也记 failed，而这一趟能在第一个任务起跑之前就说出来。两档各做一件事：隔离档的目录
@@ -389,6 +399,14 @@ const app = new Hono();
 // 最先一道：请求点名要的是另一份 navi（端口换过人）就什么都不执行，预览代理、静态页面一起
 // （为什么非得在服务端做见 instance-binding.ts）。
 app.use("*", instanceBinding());
+app.use("*", async (context, next) => {
+  if (!startupComplete && !runtimeAgentChannel(context.req.path)) {
+    context.header("x-navi-undelivered", "runtime-handoff-v1");
+    return context.json({ error: "服务正在初始化，请求未执行" }, 503);
+  }
+  return next();
+});
+app.use("*", runtimeHandoverGate());
 // 预览资源凭证在已认证的任务入口签发；资源侧再核对有效期、运行代和项目权限。
 mountPreviewProxy(app);
 // 预览代理之后挂压缩:被代理的开发服务器自己管编码,其余接口与页面资源一律经它(为什么、
@@ -632,11 +650,13 @@ app.get("/*", (c) => {
 // Bind the port before starting the scheduler. A process that cannot accept
 // HTTP callbacks must never be allowed to poll schedules or launch agents.
 await listenWindowPort(app.fetch, attachPreviewUpgrades);
-activeServer = serve({ fetch: app.fetch, port, ...(LOCAL_ONLY ? { hostname: LOCAL_ONLY_HOSTNAME } : {}) }, (info) => {
+activeServer = serve({ fetch: app.fetch, port, ...(LOCAL_ONLY ? { hostname: LOCAL_ONLY_HOSTNAME } : {}) }, async (info) => {
   // PORT=0 的测试/临时实例在绑定后才知道真实端口；接力清单读取这个动态值，才能把
   // 可回连地址带给对端，而不是把不可用的 0 端口写进任务历史。只写模块内状态，不能
   // 改 process.env.PORT：应用内终端和 agent 都会继承它，前端 dev server 会误抢 navi 端口。
   recordListeningPort(info.port);
+  try { await startRuntimeGateway(info.port); }
+  catch (error) { exitAfterStartupFailure("agent channel gateway failed", error); }
   // 预览实例**不跑调度器**：它连的是主库的快照，一条 cron 到点就会拿真项目目录去派活。
   // 快照压根没搬 schedules / scheduled_messages，这里是同一件事的第二道保险（成本一行）。
   if (IS_PREVIEW_INSTANCE) {

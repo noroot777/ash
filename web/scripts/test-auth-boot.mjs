@@ -117,6 +117,62 @@ try {
   assert.equal(slow.booting, true, "等待态没出现过 —— 慢响应下用户会对着空屏猜");
   assert.equal(await page.locator(".auth-booting").count(), 0, "状态到手后等待态要撤掉");
 
+  await page.goto(`${origin}/scripts/fixtures/auth-boot.html?mode=unavailable`);
+  await page.getByRole("heading", { name: "连不上 Navi" }).waitFor();
+  assert.equal(await page.locator(".auth-shell").count(), 0, "连接故障不展示登录宣传外壳");
+  assert.equal(await page.locator(".app-state-screen .navi-mark").count(), 1, "故障页复用品牌标志");
+  assert.equal(await page.locator(".app-state-screen .navi-loader").count(), 0, "故障不是仍在加载");
+  assert.match(await page.locator(".app-state-screen").innerText(), /服务正在重启/);
+  await page.getByRole("button", { name: "重试", exact: true }).click();
+  await page.getByRole("heading", { name: "正在连接 Navi" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "重试", exact: true }).isDisabled(), true, "重试在途不重复发起");
+  assert.equal(await page.locator(".app-state-screen .navi-loader").count(), 1, "重试期间明确显示品牌等待态");
+  assert.equal(await page.locator(".probe-workbench").count(), 0, "重试成功前仍受身份门保护");
+  await page.evaluate(() => window.__releaseAuthState());
+  await page.locator(".probe-workbench").waitFor();
+
+  await page.goto(`${origin}/scripts/fixtures/auth-boot.html?mode=local-only`);
+  await page.getByRole("heading", { name: "只接受本机访问" }).waitFor();
+  assert.equal(await page.locator(".auth-shell").count(), 0, "访问限制不展示宣传外壳");
+  assert.equal(await page.locator(".probe-workbench").count(), 0, "访问限制不能越过身份门");
+
+  await page.goto(`${origin}/scripts/fixtures/auth-boot.html?mode=crash`);
+  await page.getByRole("heading", { name: "页面没有正常显示" }).waitFor();
+  assert.equal(await page.locator(".app-crash").getAttribute("role"), "alert");
+  assert.equal(await page.locator("html").getAttribute("data-window-size"), "work", "根错误页也向原生壳确认已呈现，不能被启动占位遮住");
+  assert.equal(await page.locator(".app-crash details").getAttribute("open"), null, "技术详情默认收起");
+  await page.getByText("错误详情", { exact: true }).click();
+  assert.match(await page.locator(".app-crash pre").innerText(), /无法读取页面分块/);
+  for (const width of [1000, 360]) {
+    await page.setViewportSize({ width, height: 680 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      const fit = await page.locator(".app-crash").evaluate((node) => {
+        const button = node.querySelector("button").getBoundingClientRect();
+        return {
+          noOverflow: node.scrollWidth <= node.clientWidth,
+          actionVisible: button.left >= 0 && button.right <= innerWidth && button.bottom <= innerHeight,
+          color: getComputedStyle(node.querySelector(".navi-mark__north")).fill,
+        };
+      });
+      assert.ok(fit.noOverflow && fit.actionVisible, `${width}px/${theme} 长错误不挤走恢复按钮`);
+      assert.equal(fit.color, theme === "dark" ? "rgb(255, 107, 107)" : "rgb(229, 72, 77)");
+    }
+  }
+  await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "重新载入", exact: true }).click()]);
+  await page.getByRole("heading", { name: "页面没有正常显示" }).waitFor();
+
+  await page.goto(`${origin}/scripts/fixtures/auth-boot.html?delay=hold`);
+  await page.locator(".auth-booting").waitFor();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const reduced = await page.locator(".navi-mark__needle").evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { duration: parseFloat(style.animationDuration), count: style.animationIterationCount };
+  });
+  assert.ok(reduced.duration < 0.01 && reduced.count === "1", "减少动效时找北动画只播放一次");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.setViewportSize({ width: 1000, height: 800 });
+
   // ④ 真 index.html:预热请求确实赶在 bundle **执行**之前起飞。比的不是两条请求谁先发出
   // —— 浏览器的预扫描器会提前把 `<script src>` 抓下来,那个顺序说明不了问题;串行与否
   // 取决于「fetch 起飞时,bundle 跑起来没有」。
@@ -144,7 +200,7 @@ try {
   assert.equal(once.secondFromProbe, false, "第二次还在吃同一份快照 —— 身份变了也刷不掉它");
   assert.equal(once.realRequestsAfterSecond, 1, "第二次没打真请求,拿的是过期身份");
 
-  console.log("auth boot: 快路径无过渡屏、慢路径只给等待态、预热与 bundle 并行、快照只兑现一次 ✔");
+  console.log("auth boot: 无闪屏、品牌等待/故障、受保护重试、访问限制、崩溃恢复、深浅色窄窗、减少动效与预热快照 ✔");
 } finally {
   await browser?.close();
   await web.close();

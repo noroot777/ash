@@ -26,12 +26,13 @@ import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
 import { mountTaskSteerRoutes } from "./task-steer.js";
+import { mountWorktreeMoveRoutes } from "./task-worktree-move-routes.js";
 import { flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
 import { withAfterGates } from "./pending-after.js";
 import { pendingMessagePresence } from "./pending-wait.js";
 import { isOvertaken, queueBlockedText, queueBlockerDetails, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart, serializeQueueClaims } from "./queue-seat.js";
-import { claimOwnTurn, heldForAcceptance, isTurnClaimed, releaseTurn, stopTask, turnBusyText } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, heldForAcceptance, isTurnClaimed, releaseTurn, stopTask, turnBusyText } from "./runs.js";
 import { noted, type RejectedAction } from "./user-action-rejection.js";
 import { readActionFacts, mountTaskActionRoutes } from "./task-actions.js";
 import { requeueVerdict, retryVerdict, runVerdict, stopVerdict, teamHaltVerdict, type Verdict } from "./task-action-verdicts.js";
@@ -45,7 +46,6 @@ import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
-import { mountDispatchPlanRoutes } from "./dispatch-plan-routes.js";
 import { mountDispatchSuggestionRoutes } from "./dispatch-suggestion-routes.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { handMonitorResultsOnPause, pauseHandedNote } from "./monitor-turn-handoff.js";
@@ -80,8 +80,8 @@ export function mountTaskRunRoutes(api: Hono): void {
   mountTaskScheduleRoutes(api);
   mountTaskSessionRoutes(api);
   mountTaskSteerRoutes(api);
+  mountWorktreeMoveRoutes(api);
   mountTaskQuestionRoutes(api);
-  mountDispatchPlanRoutes(api);
   mountDispatchSuggestionRoutes(api);
   // 收敛闸口 `POST /tasks/:id/gate`(放行 / 打回 / 注入意见 / 提问)住在 duet/gate-route.ts。
   mountDuetGateRoutes(api);
@@ -125,7 +125,7 @@ api.post("/tasks/:id/run", async (c) => {
   // team 分支会立刻还回来）—— 它只为让 202 是真话:早先 team 分支排在这两道检查**之前**
   // 直接 202,验收进行中照样 startTeam,用户看到「已启动」而调度台其实撞上验收锁(审查实测)。
   if (r.mode === "team") {
-    const turn = claimOwnTurn(taskId, "team");
+    const turn = await claimOwnTurn(taskId, "team");
     if (!turn) {
       return c.json(await noted(taskId, "运行", { error: turnBusyText(taskId, "运行"), status: r.status }), 409);
     }
@@ -142,7 +142,7 @@ api.post("/tasks/:id/run", async (c) => {
   // 调用方看不见，验收锁也挡不住它）。
   // 占到的那把锁的**身份**要一路带到启动与收尾(本轮审查 F1:按任务 id 还锁会撤掉人工
   // 放开之后那一轮的互斥,理由在 turn-lock.ts 的 `endOwnTurn`)。
-  const turn = claimOwnTurn(taskId, r.mode === "duet" ? "duet" : "single");
+  const turn = await claimOwnTurn(taskId, r.mode === "duet" ? "duet" : "single");
   if (!turn) {
     return c.json(await noted(taskId, "运行", { error: turnBusyText(taskId, "运行"), status: r.status }), 409);
   }
@@ -206,7 +206,7 @@ api.post("/tasks/:id/fire", async (c) => {
     );
   }
   // 同 /run:最后一个 await 之后原子占位,202 才是真话。duet 与 single 共用这把锁。
-  const turn = claimOwnTurn(taskId, r.mode === "duet" ? "duet" : "single");
+  const turn = await claimOwnTurn(taskId, r.mode === "duet" ? "duet" : "single");
   if (!turn) {
     return c.json(await noted(taskId, "触发新一轮", { error: turnBusyText(taskId, "触发"), status: r.status }), 409);
   }
@@ -579,7 +579,7 @@ api.post("/tasks/:id/retry", async (c) => {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
   // 同 /run:原子占位,并发重试只有一个能 202;duet 走同一把锁。
-  const turn = claimOwnTurn(taskId, r.mode === "duet" ? "duet" : "single");
+  const turn = await claimOwnTurn(taskId, r.mode === "duet" ? "duet" : "single");
   if (!turn) {
     return c.json(await noted(taskId, "重试", { error: turnBusyText(taskId, "重试"), status: r.status }), 409);
   }

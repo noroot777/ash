@@ -55,6 +55,7 @@ import { windDownStep } from "./turn-wind-down.js";
 import type { TurnOwner } from "./turn-lock.js";
 import { settleContextRebuild } from "./history-reseed.js";
 import { setTaskQuestion } from "./task-question.js";
+import { registerRuntimeConsumer } from "./runtime-consumers.js";
 
 const STEERED_NOTE = "〔系统〕当前回合已由“引导会话”结束。";
 
@@ -152,7 +153,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   };
   // 对外说话的出口（实时 / trace / .md，同一条记录三处同一个身份，见 single-run-voice.ts）。**必须在
   // try 外面**：异常路径的兜底 flushSessionNotices 挂在 finally 上，声明进 try 里它就不在作用域内了。
-  const { publishEvent, flushTraceText, noteSessionNotice, flushSessionNotices, emitText, persistTrace } = createRunVoice({
+  const { publishEvent, flushTraceText, checkpointReady, noteSessionNotice, flushSessionNotices, emitText, persistTrace } = createRunVoice({
     taskId, sessId, turnStart: a.turnStart, role, agentType, runMeta, out,
   });
   try {
@@ -283,6 +284,22 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       }, 1000)
     : null;
   (offsetTimer as { unref?: () => void } | null)?.unref?.();
+  const unregisterCheckpoint = registerRuntimeConsumer(sessId, () => {
+    if (!detached?.checkpoint) throw new Error("执行器不支持输出屏障");
+    const output = detached.checkpoint();
+    let active = true;
+    return {
+      ready: output.ready.then(async () => {
+        if (!active || !progressSecured || !checkpointReady()) throw new Error("会话仍有未持久化状态，暂不切换");
+        if (!titleDone && head) await resolveTitle(true);
+        flushTraceText();
+        await new Promise<void>((resolve, reject) => out.write("", (error) => error ? reject(error) : resolve()));
+        if (!active) throw new Error("输出冻结已撤销");
+        await db.update(sessions).set({ agentOffset: detached.committed() }).where(eq(sessions.id, sessId));
+      }),
+      resume() { active = false; output.resume(); },
+    };
+  }, () => detached?.checkpointAvailable?.() === true && progressSecured && checkpointReady());
 
   try {
     // **接管一个仍然存活的回合时,先把尚未兑现的熔断判决装回来,并且接着把它终止掉。**
@@ -364,7 +381,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
           options: event.questions.length === 1 ? event.questions[0]!.options : undefined,
           items: event.questions.length > 1 ? event.questions : undefined,
           currentTurn: { token: taskRow.activeTurnToken, directionToken: taskRow.activeDirectionToken },
-        })) throw new Error("Codex 的澄清问题未能保存，请重试当前回合");
+        })) throw new Error("执行器的澄清问题未能保存，请重试当前回合");
         continue;
       }
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
@@ -461,6 +478,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     watchdogFailure = stallFailure(sessId, a.turnStart) ?? a.handle.failure?.() ?? null;
     clearTurnStall(sessId, a.handle);
     if (offsetTimer) clearInterval(offsetTimer);
+    unregisterCheckpoint();
     // 事件流到此结束 = 进入收尾段:从这里到起跑方放锁,每个 await 之前记一步(turn-wind-down.ts)。
     step("回收 CLI 的后台后代进程(cleanup)");
     const cleaned = await a.handle.cleanup?.().catch((error): CleanupResult => {

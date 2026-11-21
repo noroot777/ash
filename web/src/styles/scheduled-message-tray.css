@@ -16,7 +16,9 @@
 .scheduled-tray-attention:hover { text-decoration: underline; text-underline-offset: 2px; }
 .scheduled-tray-head { display: flex; min-width: 5em; flex: 1 1 0; align-items: center; gap: 8px; }
 .scheduled-tray-head > .scheduled-message-source { flex: none; }
-.scheduled-tray-head > .scheduled-tray-head-summary { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.scheduled-tray-head-when { min-width: 0; max-width: 55%; flex: 0 1 auto; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.scheduled-tray-head-when.is-stuck { color: var(--amber); }
+.scheduled-tray-head > .scheduled-tray-head-summary { min-width: 2em; flex: 1 1 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-tray-head > .scheduled-tray-head-summary:hover { color: var(--ink); }
 
 /* 点开后的几行：谁排进来的 · 摘要 · 什么时候发 · 行尾的键。四格对成列，所以每一条和它那一行都
@@ -67,7 +69,7 @@
 @container (max-width: 360px) {
   .scheduled-message-guide { width: 24px; justify-content: center; padding: 0; }
   .scheduled-tray-line { gap: 6px; }
-  .scheduled-tray-head { gap: 5px; }
+  .scheduled-tray-head { min-width: 4em; gap: 5px; }
   .scheduled-tray-line > .scheduled-message-guide { padding: 0; }
   .scheduled-message-guide > span { display: none; }
   /* 「哨兵 4」只留脉冲和数：那颗脉冲就是哨兵的记号，读屏名称在键上照旧说全。 */

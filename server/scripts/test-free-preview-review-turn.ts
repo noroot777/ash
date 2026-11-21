@@ -10,7 +10,6 @@
 //   ② 审查回合进行中 POST 起预览放行（free-workflow-preview.ts）
 //   ③ 快照把这件运行时事实报给前端（free-workflow-state.ts 的 reviewTurn），
 //      预览工作区那道门也认同一条（preview-workspace.ts）
-// 并且普通回合的那道门**一点都不能松**：那才是真的在改代码。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -123,14 +122,13 @@ try {
   const stopped = await api.request(`/tasks/${taskId}/free-workflow/preview`, { method: "DELETE" });
   assert.deepEqual(await stopped.json(), { stopped: true }, "审查进行中起的预览要收得回来");
 
-  // ── ③ 普通回合：一点都不能松 ──
   await reset();
   fakeOpenPreview();
   assert.equal(claimTurn(taskId, "single"), true, "回合锁没放干净");
   await setTaskStatus(taskId, "running");
   assert.equal(
-    existsSync(record), false,
-    "任务真的在改代码了，上一版的预览却留着——用户会对着旧页面验新改动",
+    existsSync(record), true,
+    "普通回合续跑不应关闭已经打开的预览",
   );
   const implementing = await snapshot();
   assert.equal(implementing.reviewTurn, false, "普通回合被当成了审查回合，放行的判据就全错了");
@@ -144,7 +142,7 @@ try {
   assert.notEqual(launchDuringWork.reason, "", "实现回合在跑时，预览工作区那道门必须照旧挡着");
   releaseTurn(taskId);
 
-  console.log("✓ 审查旁路回合：开跑不收预览、进行中可起预览、快照与预览工作区同一口径；实现回合三道门原样锁死");
+  console.log("✓ 审查与实现回合续跑均保留已打开的预览；只有审查旁路回合可以新开预览，快照与预览工作区同一口径");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

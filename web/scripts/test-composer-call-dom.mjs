@@ -273,7 +273,7 @@ try {
   const reopenedHost = host.getByRole("button", { name: /^智能体：codex/ });
   await reopenedHost.waitFor();
   assert.equal(await reopenedHost.isDisabled(), true, "任务已建好：胶囊是那条任务的执行器，只看不改");
-  assert.equal(await page.getByRole("button", { name: /^工作目录：/ }).isDisabled(), true, "工作目录也定了");
+  assert.equal(await page.getByRole("switch", { name: "独立 worktree" }).isDisabled(), true, "工作目录也定了");
   start = requests.length;
   await send.click();
   await page.getByText("提示：任务已创建，第一句交给 claude 答").waitFor();
@@ -370,7 +370,7 @@ try {
   await page.getByTestId("convert-note").click();
   await waitUntil(async () => (await objective.inputValue()).startsWith("随手记 B：新的一件事"), "随手记并进草稿");
   assert.equal(await page.getByRole("alert").filter({ hasText: "第一回合没发出去" }).count(), 0, "待重发的那条解开了");
-  assert.equal(await page.getByRole("button", { name: /^工作目录：/ }).isDisabled(), false, "设置不再锁着");
+  assert.equal(await page.getByRole("switch", { name: "独立 worktree" }).isDisabled(), false, "设置不再锁着");
   start = requests.length;
   await send.click();
   await waitUntil(async () => since(start).length >= 2, "并进来的那件事新建并问 codex");

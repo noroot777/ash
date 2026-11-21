@@ -20,6 +20,15 @@
   outline: 2px solid var(--focus-ring); outline-offset: 1px;
 }
 .sg-gap { flex: 1 1 0; min-width: 4px; }
+/* 等哪几件做完再开工：跟在标题后面的一句小灰字，窄了先缩它。 */
+.sg-after {
+  min-width: 0; flex: 0 1 auto; overflow: hidden; color: var(--faint); font-size: var(--t-xs);
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 智能体停下来在等这一批：记号换成强调色；好几件里只有一部分在等时，在等的那几行的号也换。 */
+.sg.is-waiting > .sg-row > .sg-mark, .sg-list > li.is-waiting .sg-key { color: var(--accent); }
+.sg-list > li.is-waiting .sg-key { background: var(--accent-soft); }
 
 /* 行尾「派出去」：一按就派。描边不实心——框里实心的键只有右下角那一颗。 */
 .sg-go {
@@ -87,3 +96,5 @@
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion="full"]) .sg-detail { animation: none; }
 }
+/* 读全文的左抽屉里那一件的正文（SuggestionReader.tsx）。 */
+.sg-reading { padding: 4px 2px 12px; }

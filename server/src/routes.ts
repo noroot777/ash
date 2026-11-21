@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { mountRuntimeHandoverRoutes } from "./runtime-handover-routes.js";
 import type { Context } from "hono";
 import { stream, streamSSE } from "hono/streaming";
 import { getConnInfo } from "@hono/node-server/conninfo";
@@ -17,8 +18,9 @@ import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
 import { previousResidualLockPublic } from "./singleton.js";
 import { CODE_DIR, DATA_DIR } from "./paths.js";
-import { LOCAL_ONLY } from "./local-only.js";
+import { DESKTOP_APP, LOCAL_ONLY } from "./local-only.js";
 import { INSTANCE_ID } from "./instance-binding.js";
+import { instanceTag } from "./instance-tag.js";
 import { windowPort } from "./window-port.js";
 import { isLocalDirect } from "./auth/remote-access.js";
 import { mountHostNaviMcpRoutes } from "./host-navi-mcp-routes.js";
@@ -127,9 +129,12 @@ api.get("/health", (c) => c.json({
   // 这个端点免登录，别的机器不该从这里读到这台机器的目录结构。
   // `id` 是这个进程的实例号：认过人的窗口拿它给页面请求打上记号，换了人的那一份据此拒收
   // （instance-binding.ts）。
+  // `desktop`：是不是 Navi.app 起的那一份（local-only.ts）—— app 认自家只看它，不看 `localOnly`：
+  // 用户放开别的设备访问之后 `localOnly` 是 false，服务照样是 app 那份。
+  // `tag`：这份 Navi 跨重启不变的指纹（instance-tag.ts），app 收到 navi:// 链接时拿它认链接是不是冲着自己这份来的。
   // `windowPort` 是 mac app 窗口专用、真正监听上了的那个端口（window-port.ts），没有就是 null。
   ...(isLocalDirect(c) ? { instance: { id: INSTANCE_ID, dataDir: DATA_DIR, codeDir: CODE_DIR, localOnly: LOCAL_ONLY,
-    windowPort: windowPort() } } : {}),
+    desktop: DESKTOP_APP, tag: instanceTag(), windowPort: windowPort() } } : {}),
 }));
 
 // 「现在重启会打断谁」。scripts/restart.mjs 的安全闸靠它决定拦不拦 —— 只数
@@ -144,6 +149,7 @@ api.get("/health", (c) => c.json({
 //
 // 匿名那一档两种模式都要校验:自用模式下匿名 = 别的机器没带访问密钥就来打(本机跑
 // 重启脚本是本机直连,不是匿名),免登录名单放行的只是路径形状。
+mountRuntimeHandoverRoutes(api);
 api.get("/restart-impact", async (c) => {
   const { actorOf } = await import("./auth/context.js");
   if (actorOf(c).kind === "anonymous") {
@@ -156,7 +162,13 @@ api.get("/restart-impact", async (c) => {
     }
   }
   const { restartImpact } = await import("./reattach.js");
-  return c.json(await restartImpact());
+  const protocol = c.req.query("protocol");
+  const schema = c.req.query("schema");
+  const impact = await restartImpact(protocol !== undefined || schema !== undefined
+    ? { protocol: Number(protocol), schema } : undefined);
+  if (c.req.query("shutdown") !== "1") return c.json(impact);
+  const { shutdownResources } = await import("./shutdown-resources.js");
+  return c.json({ ...impact, shutdown: await shutdownResources() });
 });
 
 // ── global settings ──────────────────────────────────────────────────────

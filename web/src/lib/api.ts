@@ -37,8 +37,9 @@ import type {
   TaskWorkspaceDiscardResult,
 } from "@navi/shared";
 
-import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult } from "@navi/shared/accept-gate";
+import type { AcceptGateCancelResult, AcceptGateView, AcceptMemoryWrite, AcceptMemoryWriteResult, AcceptPushDestination, AcceptPushView } from "@navi/shared/accept-gate";
 import type { BaseUpdateRecovery } from "@navi/shared/branch-plan";
+import type { ProjectBranches } from "@navi/shared/task-branch";
 import type { WorkflowDef, WorkflowItem } from "@navi/shared/workflow";
 import type { CliHostEnv } from "@navi/shared/cli-overrides";
 import type { CliModelCatalog } from "@navi/shared/cli-presets";
@@ -48,6 +49,7 @@ import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
 import { prerequisiteApi } from "./apiPrerequisites.ts";
 import { taskMemoApi } from "./apiTaskMemos.ts";
+import { worktreeAdoptApi } from "./apiWorktreeAdopt.ts";
 import { userMessageApi } from "./apiUserMessages.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
@@ -139,7 +141,7 @@ export const api = {
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
   projectHealth: (projectId: string): Promise<ProjectHealth> =>
     request(`/projects/${id(projectId)}/health`),
-  projectBranches: (projectId: string): Promise<{ branches: string[]; current: string | null }> =>
+  projectBranches: (projectId: string): Promise<ProjectBranches> =>
     request(`/projects/${id(projectId)}/branches`),
   projectGitOverview: (projectId: string): Promise<GitOverview> =>
     request(`/projects/${id(projectId)}/git-overview`),
@@ -274,7 +276,7 @@ export const api = {
   retryTurn: (
     taskId: string,
     target: { kind: "turn"; sessionId: string } | { kind: "review"; review: { runId: string; round: number; generation: string | null } },
-  ): Promise<{ started: true; mode: "resend" | "resume" | "review"; resumed?: boolean }> =>
+  ): Promise<{ started: true; mode: "resend" | "continue" | "resume" | "review"; resumed?: boolean }> =>
     request(`/tasks/${id(taskId)}/retry-turn`,
       json("POST", target.kind === "review" ? { review: target.review } : { sessionId: target.sessionId })),
   requeueTask: (taskId: string): Promise<{ task: Task; movedToEnd: boolean }> =>
@@ -289,16 +291,14 @@ export const api = {
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
   answerTask: (taskId: string, answer: string, input?: import("@navi/shared/questions").QuestionAnswerInput, attachments?: string[]): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input, ...(attachments?.length ? { attachments } : {}) })),
-  // 派活单「派出去」：服务端照卡上此刻的样子建任务、挂在这条名下、起跑，再把清单作为答复续上会话。
-  launchDispatchPlan: (taskId: string, input: import("@navi/shared/dispatch-plan").DispatchLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
-    request(`/tasks/${id(taskId)}/dispatch-plan/launch`, json("POST", input)),
-  // 可以派出去的活：「派出去」照那一行此刻的样子建任务（这条任务的智能体不被叫醒）；叉 = 这一件不派。
-  launchSuggestions: (taskId: string, input: import("@navi/shared/dispatch-suggestion").DispatchSuggestionLaunchInput): Promise<{ tasks: { id: string; title: string }[] }> =>
+  // 挂在回复框顶上的活（接口形状见 shared/src/dispatch-suggestion.ts 文件头）：「派出去」照那几行此刻的样子建任务；
+  // 叉 = 这一件不派。等着的那一批这一下处理完了回 closed: true。
+  launchSuggestions: (taskId: string, input: import("@navi/shared/dispatch-suggestion").DispatchSuggestionLaunchInput): Promise<{ tasks: { id: string; title: string }[]; closed: boolean }> =>
     request(`/tasks/${id(taskId)}/dispatch-suggestions/launch`, json("POST", input)),
-  dropSuggestion: (taskId: string, suggestionId: string): Promise<{ dropped: boolean }> =>
+  dropSuggestion: (taskId: string, suggestionId: string): Promise<{ dropped: boolean; closed: boolean }> =>
     request(`/tasks/${id(taskId)}/dispatch-suggestions/${id(suggestionId)}`, { method: "DELETE" }),
   // 「派出去的活交给谁」：null = 同这里。
-  setDispatchTarget: (taskId: string, target: import("@navi/shared/dispatch-plan").DispatchRunTarget | null): Promise<Task> =>
+  setDispatchTarget: (taskId: string, target: import("@navi/shared/dispatch-target").DispatchRunTarget | null): Promise<Task> =>
     request(`/tasks/${id(taskId)}/dispatch-target`, json("PUT", { target })),
   replyTask: (
     taskId: string,
@@ -437,12 +437,16 @@ export const api = {
     // 对验收前置命令的额外指令：rerun=这一按就重跑一遍，skip=这一次不跑直接合。
     // 不传 = 照常（有现成结果就沿用，没有就跑一遍）。
     gate?: "skip" | "rerun",
+    // 合完推到目标分支的远程（先同步远程、不强推，server/src/task-accept-push.ts）。不传 = 不推。
+    // 发的是确认层显示的那个目的地（含推送地址）：执行时不是同一处服务端就拒。
+    push?: AcceptPushDestination,
   ): Promise<AcceptTaskResult> => {
-    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified, commit, gate }));
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified, commit, gate, push }));
     const body = await parseBody(response);
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
   },
+  acceptPush: (taskId: string, signal?: AbortSignal): Promise<AcceptPushView> => request(`/tasks/${id(taskId)}/accept-push`, { signal }),
   // 确认层点确认时记下这一次怎么勾的（按人按项目；「提交」写回项目设置，要管理权限）。
   rememberAccept: (projectId: string, write: AcceptMemoryWrite, signal?: AbortSignal): Promise<AcceptMemoryWriteResult> =>
     request(`/accept-memory/${id(projectId)}`, { ...json("PUT", write), signal }),
@@ -484,6 +488,10 @@ export const api = {
     if (body && typeof body === "object" && "completed" in body) return body as FamilyAcceptanceResult;
     throw apiError(response, body);
   },
+  // 改到独立工作区（服务端 task-worktree-move-routes.ts）：项目目录有未提交改动、已经在独立工作区里时 409，原因原样给人看。
+  moveToWorktree: (taskId: string, base: string, mergeTargetBranch: string | null): Promise<{ moved: { path: string; branch: string } }> =>
+    request(`/tasks/${id(taskId)}/worktree-move`, json("POST", { base, mergeTargetBranch })),
+  cancelWorktreeMove: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}/worktree-move`, { method: "DELETE" }),
   taskDiff: (taskId: string): Promise<TaskDiffResult> =>
     request(`/tasks/${id(taskId)}/diff`),
   // 跟 `taskScmDiff` 是两个问题，别混：那个读的是工作目录此刻还没提交的东西（索引 + 工作树），
@@ -646,6 +654,7 @@ export const api = {
   ...previewAssistApi,
   // 任务备忘同理，住在 apiTaskMemos.ts。
   ...taskMemoApi,
+  ...worktreeAdoptApi,
   // R 键「我说过的话」同理，住在 apiUserMessages.ts。
   ...userMessageApi,
   // 飞书通道那一组住在 feishuApi.ts（守 700 行）。

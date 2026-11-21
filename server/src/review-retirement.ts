@@ -5,7 +5,7 @@ import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
 import { activeReviewScope, type ReviewDelivery } from "./review-ownership.js";
 import { assertConclusionTask } from "./regression-conclusion-commit.js";
 import { RegressionConclusionRejected } from "./regression-conclusion-errors.js";
-import { claimOwnTurn, releaseTurn, type TurnIdentity, type TurnSource } from "./runs.js";
+import { claimOwnTurnWhenReady as claimOwnTurn, releaseTurn, type TurnIdentity, type TurnSource } from "./runs.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { clearReviewWait, reviewWaitForExit } from "./review-wait.js";
 import { taskStartStatus } from "./task-start-status.js";
@@ -49,7 +49,7 @@ export async function retireHistoricalReview(expected: TaskRow, source: TurnSour
   if (!candidate) return false;
   // 自己占的那一把,或者调用方交下来的那一把 —— 两条路都要把身份留住:还锁只能还自己
   // 那一把(本轮审查 F1,理由在 turn-lock.ts 的 `endOwnTurn`)。
-  const turn = turnHeld ?? claimOwnTurn(expected.id, source.role,
+  const turn = turnHeld ?? await claimOwnTurn(expected.id, source.role,
     source.role === "reviewer" && source.review !== "unbound" ? source.review : null);
   if (!turn) return false;
   let retired = false;

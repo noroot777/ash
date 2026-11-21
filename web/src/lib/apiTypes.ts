@@ -1,5 +1,6 @@
 // 只有服务端 API 才会返回的形状（shared 里没有对应类型的那些）。
 // 从 `api.ts` 搬出来的，调用点照旧从 `api.ts` 引：那边整份再导出。
+import type { ProjectBranches } from "@navi/shared/task-branch";
 import type {
   AgentType,
   FreeWorkflowState,
@@ -102,9 +103,7 @@ export type SessionTraceEntry = {
     | { kind: "usage"; usage: TokenUsage; accounting?: UsageAccountingMark };
 };
 
-export type GitOverview = {
-  branches: string[];
-  current: string | null;
+export type GitOverview = ProjectBranches & {
   worktrees: {
     path: string;
     branch: string | null;
@@ -419,6 +418,8 @@ export type AcceptTaskSuccess = {
   warnings?: AcceptTaskWarning[];
   /** 「点头之后」那一段（发布脚本之类）跑得怎么样；线上没写这一段就没有这个字段 */
   tail?: { ok: boolean; step?: string; reason?: string; movedOn?: boolean };
+  /** 选了推送：推没推上去（推不上去不改「已验收」） */
+  push?: import("@navi/shared/accept-gate").AcceptPushOutcome;
 };
 
 export type AcceptTaskFailure = {
@@ -449,6 +450,8 @@ export type AcceptTaskFailure = {
   conflictHandoff?: { notified: boolean; message: string };
   /** 验收前置命令那三种失败（accept_gate_required/running/failed）带回来的现场。 */
   gate?: import("@navi/shared/accept-gate").AcceptGateView;
+  /** 合并已完成、后面某步停住时：推送那一下的结果。 */
+  push?: import("@navi/shared/accept-gate").AcceptPushOutcome;
 };
 
 export type AcceptTaskResult = AcceptTaskSuccess | AcceptTaskFailure;

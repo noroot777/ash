@@ -1,0 +1,68 @@
+/* 标签编辑器（components/TaskLabelsEditor.tsx）：一枚一枚的小块，点小块就移除；后面接一个没框的
+   输入，回车或逗号加一枚。这里是它在哪都一样的长相，各处只按上下文调外框（信息格里无框、
+   新建任务的浮层里是一个和输入框同高同框的字段）。 */
+.task-label-editor {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-label-editor > button {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  height: 22px;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--overlay);
+  padding: 0 4px 0 8px;
+  color: var(--ink);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+  transition: background var(--dur-1) var(--ease-out);
+}
+.task-label-editor > button:hover:not(:disabled) { background: var(--sel-bg); }
+/* 文字单独一格、可以收：再长的标签也只在小块里省略，后面的 × 始终留在小块里看得见。 */
+.task-label-editor > button > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-label-editor > button > svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--faint);
+  transition: color var(--dur-1) var(--ease-out);
+}
+.task-label-editor > button:hover:not(:disabled) > svg { color: var(--ink); }
+.task-label-editor > button:disabled { padding-right: 8px; }
+.task-label-editor > button:disabled > svg { display: none; }
+
+.task-label-editor > label {
+  display: inline-flex;
+  min-width: 0;
+  height: 22px;
+  align-items: center;
+  padding: 0 4px;
+  color: var(--muted);
+}
+.task-label-editor > label > svg { display: none; }
+
+.task-label-editor input {
+  width: 4em;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--ink);
+  font-size: var(--t-xs);
+  outline: 0;
+  box-shadow: none;
+}
+.task-label-editor input::placeholder { color: var(--muted); }

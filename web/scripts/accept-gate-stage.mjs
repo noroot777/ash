@@ -110,7 +110,7 @@ export async function assertTone(row, tone, message) {
  */
 export function gateStage({ browser, base }) {
   return async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled",
-    projectDown = false, acceptCommit, acceptReply, children = [], status = 0, hold = null, init = null, clock = false, ready = true } = {}) => {
+    projectDown = false, acceptCommit, acceptReply, children = [], status = 0, hold = null, init = null, clock = false, ready = true, push = null } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
     if (clock) await page.clock.install();
     if (init) await init(page);
@@ -135,6 +135,7 @@ export function gateStage({ browser, base }) {
       requestIds: [], status, hold, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate,
       projectReads: 0, projectDown, accepts: [], acceptReply, stage: new URLSearchParams(query).get("stage") ?? "verified",
       memory: [], memoryDown: false, memoryHold: null, projectHold: null, acceptCommit,
+      push: push ?? { destination: null, unavailable: null, remembered: false }, pushReads: 0, pushHold: null,
       taskFetches: 0, unexpected: [] };
     // 优先级最低的兜底：没桩的请求一律 404 并记下来，免得落到 vite 上回一页 HTML。
     await page.route("**/api/**", (route) => {
@@ -156,6 +157,14 @@ export function gateStage({ browser, base }) {
     });
     await page.route("**/api/tasks/*/branch-plan", (route) => json(route, branchPlan(children)));
     await page.route("**/api/tasks/*/free-workflow", (route) => json(route, freeWorkflow()));
+    // 「推送」那一步：缺省这个假仓库没有远程，确认层不画它；`push` 给了 destination 才有（`store.pushDown` 让它回 503，
+    // `store.pushHold` 给一个 promise 就扣住它，`store.pushReads` 数到达桩的发数）。
+    await page.route("**/api/tasks/*/accept-push", async (route) => {
+      const held = store.pushHold;
+      store.pushReads += 1;
+      if (held) await held;
+      await (store.pushDown ? json(route, { error: "数据库忙" }, 503) : json(route, store.push)).catch(() => {});
+    });
     // 不是 git 仓库：「未提交改动」那一行不出（它有自己的回归）。
     await page.route("**/api/tasks/*/scm", (route) => json(route, { error: "不是 Git 仓库" }, 400));
     await page.route("**/api/tasks/gate-task/accept", (route) => {
@@ -186,6 +195,7 @@ export function gateStage({ browser, base }) {
       if (store.memoryHold) { await store.memoryHold; return; }
       if (store.memoryDown) return json(route, { error: "数据库忙" }, 503);
       if (typeof body.skipGate === "boolean") store.gate = { ...store.gate, skipRemembered: body.skipGate };
+      if (typeof body.push === "boolean") store.push = { ...store.push, remembered: body.push };
       const commitSaved = typeof body.commit === "boolean" && role === "admin";
       if (commitSaved) store.acceptCommit = body.commit;
       return json(route, { skipGate: store.gate?.skipRemembered === true, commit: store.acceptCommit !== false, commitSaved });
@@ -259,9 +269,10 @@ export function gateStage({ browser, base }) {
  * 先恢复服务端再去点「重试」，自动重试可能抢先落地、那颗按钮在点之前就没了。所以先扣住下一发
  * 自动重试（单飞：它在途时不会再排第二发），再恢复服务端 —— 此刻能落地的只有点出来的那一发。
  */
-export async function freezeAutoRetry(store) {
-  store.hold = new Promise(() => {});
-  const before = store.reads;
-  await waitUntil(() => store.reads > before, "下一发自动重试到达桩（被扣住）");
-  store.hold = null;
+export async function freezeAutoRetry(store, read = "gate") {
+  const [hold, reads] = read === "push" ? ["pushHold", "pushReads"] : ["hold", "reads"];
+  store[hold] = new Promise(() => {});
+  const before = store[reads];
+  await waitUntil(() => store[reads] > before, "下一发自动重试到达桩（被扣住）");
+  store[hold] = null;
 }

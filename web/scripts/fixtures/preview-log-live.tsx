@@ -78,7 +78,7 @@ const longServiceLog = Array.from({ length: 220 }, (_, index) => `all service li
 // 启动那一段是可以被**取消**的：DELETE 不跟 POST 抢锁（服务端 free-workflow-preview.ts），
 // 在跑的那趟随后自己发现代号没了、以失败返回。这里把这条时序也复现出来 —— 否则「界面上
 // 有没有一颗点得到的取消」这件事根本测不到。
-let startPosted = false;
+let startPosted = mode === "already-starting";
 let canceled = false;
 let failStart: ((reason: unknown) => void) | null = null;
 /** cancel-late-success 那一路：让挂着的 POST **成功**返回（由页面上那颗控制按钮触发）。 */
@@ -222,7 +222,7 @@ const task = {
   projectId: "P1",
   title: "预览日志",
   body: "",
-  status: "done",
+  status: new URLSearchParams(location.search).get("status") ?? "done",
   stage: "implemented",
   mode: "single",
   workflowMode: "free",

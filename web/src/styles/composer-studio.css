@@ -23,15 +23,16 @@
 .is-studio .composer-slash-menu, .is-studio .composer-mention-menu { left:12px; max-width:calc(100% - 24px); }
 .studio-card > .task-upload-list { padding:4px 12px 0; }
 
-/* 底排：附件、选项入口在左，谁来做 + 发送键一组靠右。入口不压缩；只有「组织与标签」的字会变长
-   （分组名 · 几个标签），位置不够时收它。一行放不下时右边那一组整组换到下一行、仍靠右，
-   谁都不压谁；卡片窄到连入口都放不下时入口只留图标。 */
+/* 底排：附件、工作目录、选项入口在左（一组，.composer-opts），谁来做 + 发送键一组靠右。入口不压缩；
+   只有「组织与标签」的字和分支名会变长，位置不够时收它们。一行放不下时右边那一组整组换到下一行、
+   仍靠右，谁都不压谁；卡片窄到连入口都放不下时入口只留图标，左边那组再放不下就在组内折行。 */
 .studio-card { container-type:inline-size; }
 .studio-card > .composer-footer { display:flex; flex-wrap:wrap; align-items:center; gap:6px 4px; min-height:54px; padding:8px 10px 10px; }
 .studio-card > .composer-footer .task-reply-icon { display:grid; width:28px; height:28px; flex:none; place-items:center; border:0; border-radius:var(--r-md); background:transparent; color:var(--muted); transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .studio-card > .composer-footer .task-reply-icon:hover:not(:disabled) { background:var(--hover-bg); color:var(--ink); }
 .studio-card > .composer-footer .task-reply-icon > svg { width:16px; height:16px; }
-.composer-opts { display:flex; flex:0 1 auto; min-width:0; align-items:center; gap:2px; margin-left:4px; }
+.composer-opts { display:flex; flex:0 1 auto; flex-wrap:wrap; min-width:0; align-items:center; gap:6px 2px; }
+.composer-opts > .task-reply-icon { margin-right:6px; }
 .composer-foot-run { display:flex; flex:0 1 auto; min-width:0; align-items:center; margin-left:auto; padding-left:4px; }
 .composer-opt { display:inline-flex; flex:none; min-width:0; height:28px; align-items:center; gap:6px; border:0; border-radius:var(--r-md); padding:0 8px; background:transparent; color:var(--muted); font-size:var(--t-xs); white-space:nowrap; transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
 .composer-opt > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
@@ -45,6 +46,27 @@
   .composer-opts .composer-opt { min-width:0; }
   .composer-opts .composer-opt > span { display:none; }
 }
+
+/* 底排打头的一组：worktree 开关、从哪条分支开工（ComposerWorkspace.tsx），常驻、不用点开。和旁边的
+   入口一样的高度、字号与灰度，不带外框，指到才有底色；位置不够时先收分支名（省略号），整组不换行。 */
+.composer-workspace { display:flex; flex:0 1 auto; min-width:0; align-items:center; gap:2px; margin-right:2px; color:var(--muted); font-size:var(--t-xs); white-space:nowrap; }
+.composer-workspace.is-static { flex:none; gap:6px; padding:0 8px; }
+.composer-workspace > .ui-choice { flex:none; gap:8px; height:28px; border-radius:var(--r-md); padding:0 8px 0 6px; color:var(--muted); font-size:var(--t-xs); transition:background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.composer-workspace > .ui-choice:hover:not(:disabled) { background:var(--hover-bg); color:var(--ink); }
+.composer-workspace > .ui-choice[aria-checked="true"] { color:var(--ink); }
+.composer-workspace > .ui-choice:disabled { opacity:.55; }
+.composer-workspace > .ui-choice > .ui-toggle { width:26px; height:16px; flex-basis:26px; }
+.composer-workspace > .ui-choice > .ui-toggle::after { width:12px; height:12px; }
+.composer-workspace-base { flex:0 1 auto; min-width:64px; max-width:260px; }
+.composer-workspace-base .ui-select-trigger { height:28px; border-radius:var(--r-md); padding:0 6px 0 8px; color:var(--ink); font-size:var(--t-xs); }
+.composer-workspace-base .ui-select-trigger > span:first-child { display:inline-flex; align-items:center; gap:6px; }
+.composer-workspace-base .ui-select-trigger > span:first-child > svg { flex:none; color:var(--muted); }
+.composer-workspace-base .ui-select-trigger.is-mono > span:first-child { font-size:var(--t-xs); }
+.composer-workspace-merge { min-width:0; overflow:hidden; padding:0 4px; text-overflow:ellipsis; }
+.composer-workspace-merge > code { color:var(--ink); font-family:var(--font-mono); font-size:var(--t-xs); }
+.composer-workspace-save { flex:none; height:24px; margin-left:2px; border:0; border-radius:var(--r-sm); padding:0 8px; background:var(--raised); color:var(--ink); font-size:var(--t-xs); transition:background var(--dur-1) var(--ease-out); }
+.composer-workspace-save:hover:not(:disabled) { background:var(--hover-bg); }
+.composer-workspace-save:disabled { opacity:.55; }
 
 /* 谁来做：单任务是一颗三段胶囊 */
 .studio-inline-executor { display:flex; flex:0 1 auto; min-width:0; align-items:center; gap:4px; margin:0 4px; }
@@ -104,9 +126,6 @@
 .studio-popover .composer-queue-after .studio-help { margin-top:0; }
 .studio-help { margin:12px 0 0; font-size:var(--t-xs); line-height:1.6; color:var(--muted); }
 .studio-help > svg { display:inline; margin-right:6px; vertical-align:-2px; }
-.composer-workspace-default-save { display:inline-flex; align-items:center; margin-left:6px; border:0; border-radius:var(--r-sm); padding:2px 8px; background:var(--raised); color:var(--ink); font-size:var(--t-xs); }
-.composer-workspace-default-save:hover:not(:disabled) { background:var(--hover-bg); }
-.composer-workspace-default-save:disabled { opacity:.55; }
 
 /* 「?」点开的快捷键帮助：四组，两列 */
 .studio-popover.composer-help { width:auto; padding:14px 16px 12px; }

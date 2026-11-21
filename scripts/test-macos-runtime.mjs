@@ -1,0 +1,291 @@
+import assert from "node:assert/strict";
+import { constants, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
+import { sealRuntime, installRuntime, verifyRuntime } from "../desktop/macos/scripts/runtime-store.mjs";
+import { runTestProcess } from "./test-process.mjs";
+import { spawnTestFixture } from "./test-process-scope.mjs";
+import { withTestResources } from "./test-process-resources.mjs";
+
+if (process.platform !== "darwin") {
+  console.log("SKIP: macOS immutable runtime regression");
+} else {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const temporary = mkdtempSync(join(tmpdir(), "navi-macos-runtime-"));
+  const fixtures = [];
+  await withTestResources(async () => {
+    const data = join(temporary, "data");
+    const store = join(data, ".mac-runtimes");
+    const app = join(temporary, "Applications/Navi.app");
+    const payload = join(app, "Contents/Resources/app");
+    const next = join(temporary, "build/Navi.app");
+    const nextPayload = join(next, "Contents/Resources/app");
+    const runtimeTool = join(root, "desktop/macos/scripts/runtime-store.mjs");
+    const binary = join(temporary, "runtime-driver");
+    const ready = join(temporary, "ready.json");
+    const activity = join(temporary, "activity");
+    const requests = join(temporary, "requests");
+    const options = join(temporary, "options.json");
+    mkdirSync(data, { recursive: true });
+    function makePayload(directory, version) {
+      for (const relative of ["node/bin", "scripts", "server/dist", "mcp/dist"]) mkdirSync(join(directory, relative), { recursive: true });
+      copyFileSync(process.execPath, join(directory, "node/bin/node"), constants.COPYFILE_FICLONE);
+      copyFileSync(join(root, "desktop/macos/scripts/bundle-users.sh"), join(directory, "../bundle-users.sh"));
+      const libraries = join(dirname(process.execPath), "../lib");
+      if (existsSync(libraries)) {
+        for (const name of readdirSync(libraries).filter((entry) => /^libnode.*\.dylib$/.test(entry))) {
+          mkdirSync(join(directory, "node/lib"), { recursive: true });
+          copyFileSync(join(libraries, name), join(directory, "node/lib", name), constants.COPYFILE_FICLONE);
+        }
+      }
+      copyFileSync(runtimeTool, join(directory, "scripts/runtime-store.mjs"));
+      writeFileSync(join(directory, ".in-use"), "");
+      writeFileSync(join(directory, "version"), version);
+      writeFileSync(join(directory, "mcp/dist/index.js"), `
+const fs = require('node:fs');
+if (process.argv[2]) fs.writeFileSync(process.argv[2], fs.realpathSync(__dirname + '/../..'));
+setInterval(() => {}, 1000);
+`);
+      writeFileSync(join(directory, "server/dist/index.js"), `
+const http = require('node:http'); const fs = require('node:fs');
+const codeDir = fs.realpathSync(__dirname + '/../..');
+const settings = () => JSON.parse(fs.readFileSync(${JSON.stringify(options)}, 'utf8'));
+http.createServer((req, res) => {
+  res.setHeader('content-type', 'application/json');
+  if (req.url === '/api/health') return res.end(JSON.stringify({ ok: true, pid: process.pid,
+    instance: { id: 'runtime-fixture', codeDir, dataDir: ${JSON.stringify(data)}, desktop: true, windowPort: 45555 } }));
+  const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/api/restart-impact' && !url.searchParams.has('shutdown')) {
+    const opts = settings();
+    const target = opts.omitPreflight || !url.searchParams.has('protocol') ? undefined
+      : { protocol: Number(url.searchParams.get('protocol')), schema: url.searchParams.get('schema') };
+    const impact = opts.impact;
+    const blocked = [...(impact.runtimeHandover?.blocked ?? []), ...impact.interrupted,
+      ...impact.resumes.map(item => ({ ...item, reason: '调度台当前回合不能无损接管' })),
+      ...(opts.gatewayUnavailable ? [{ id: 'runtime-gateway', title: '稳定通道', reason: '稳定通道暂不可用' }] : [])];
+    return res.end(JSON.stringify({ ...impact, runtimeHandover: impact.runtimeHandover && { ...impact.runtimeHandover, blocked, target } }));
+  }
+  if (req.url === '/api/restart-impact?shutdown=1') {
+    const opts = settings(); return res.end(JSON.stringify({ ...opts.impact, shutdown: opts.shutdown }));
+  }
+  if (req.url === '/api/runtime-handover') {
+    if (req.headers['x-navi-host-token'] !== 'fixture-token' || req.headers['x-navi-instance'] !== 'runtime-fixture') {
+      res.statusCode = 403; return res.end('{}');
+    }
+    let body = ''; req.on('data', chunk => body += chunk); req.on('end', () => {
+      const request = JSON.parse(body); fs.appendFileSync(${JSON.stringify(requests)}, body + '\\n');
+      const opts = settings();
+      if (!request.check && !request.release && opts.rejectLease) { res.statusCode = 409; return res.end('{}'); }
+      res.end(JSON.stringify(request.check ? { valid: !opts.expired } : request.release ? { released: true } : { lease: 'lease', protocol: 1 }));
+    }); return;
+  }
+  res.statusCode = 404; res.end('{}');
+}).listen(0, '127.0.0.1', function () {
+  fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, port: this.address().port }));
+});
+setInterval(() => fs.writeFileSync(${JSON.stringify(activity)}, fs.readFileSync(codeDir + '/version')), 30);
+`);
+      return sealRuntime(directory);
+    }
+    const oldManifest = makePayload(payload, "old");
+    const oldRuntime = installRuntime(payload, store);
+    assert.equal(installRuntime(payload, store), oldRuntime);
+    makePayload(nextPayload, "new");
+    const newRuntime = installRuntime(nextPayload, store);
+    assert.notEqual(newRuntime, oldRuntime);
+    assert.equal(readFileSync(join(oldRuntime, "version"), "utf8"), "old");
+    assert.equal(readdirSync(store).some((name) => name.startsWith(".installing-")), false);
+    console.log("✓ 内容寻址、幂等发布、新旧运行时并存与暂存清理");
+
+    const bad = join(temporary, "bad");
+    cpSync(nextPayload, bad, { recursive: true, verbatimSymlinks: true });
+    writeFileSync(join(bad, "version"), "tampered");
+    assert.throws(() => installRuntime(bad, store), /校验失败/);
+    const escaped = join(temporary, "escaped");
+    mkdirSync(escaped);
+    symlinkSync("/tmp", join(escaped, "outside"));
+    assert.throws(() => sealRuntime(escaped), /链接越界/);
+    assert.equal(verifyRuntime(oldRuntime).id, oldManifest.id);
+    console.log("✓ 损坏内容与越界链接拒绝发布，旧运行时不受影响");
+
+    const mac = join(root, "desktop/macos");
+    await runTestProcess("swiftc", ["-swift-version", "5",
+      ...["NaviConfig", "NaviHealth", "DataImport", "DatabaseBackup", "LegacyIdentity", "LoginService", "RestartImpact", "ServerControl", "ServerLauncher", "ServerStartLock", "UpdateGate", "RuntimeRecovery", "BundleRuntimeUse"]
+        .map((name) => join(mac, `Sources/${name}.swift`)),
+      join(mac, "Tests/Runtime/main.swift"), "-o", binary], { cwd: root, encoding: "utf8", timeout: 120_000 });
+    const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(NAVI|ASH|HARNESS)_/.test(name)));
+    const env = { ...baseEnv, NAVI_MAC_RUNTIME: nextPayload, NAVI_DATA_DIR: data, NAVI_MAC_WINDOW_PORT: "45555" };
+    const drive = async (mode, extra = {}) => (await runTestProcess(binary, [mode], {
+      cwd: root, encoding: "utf8", timeout: 20_000, env: { ...env, ...extra },
+    })).stdout;
+    assert.equal(realpathSync((await drive("prepare")).trim().slice("READY ".length)), newRuntime);
+    assert.match(await drive("abort"), /PROCEED[\s\S]*ABANDONED true/);
+    console.log("✓ Swift 启动路径使用独立版本，Sparkle 安装及中止不停止旧服务");
+
+    const empty = { survives: [], resumes: [], interrupted: [], mcpDisrupted: [], runtimeHandover: { blocked: [], sessions: [] } };
+    const survivor = { id: "single", title: "still working", pid: process.pid };
+    const setOptions = (value) => writeFileSync(options, JSON.stringify({ impact: { ...empty, survives: [survivor], mcpDisrupted: [survivor] }, ...value }));
+    const waitFor = async (predicate) => {
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if (predicate()) return;
+        await new Promise((done) => setTimeout(done, 25));
+      }
+      assert.fail("fixture did not become ready");
+    };
+    const start = async (runtime = oldRuntime) => {
+      rmSync(ready, { force: true });
+      const fixture = spawnTestFixture(join(runtime, "node/bin/node"), [join(runtime, "server/dist/index.js")], { cwd: data, stdio: "ignore" });
+      fixtures.push(fixture);
+      await waitFor(() => existsSync(ready));
+      const identity = JSON.parse(readFileSync(ready, "utf8"));
+      writeFileSync(join(data, "navi.db.navi.lock"), JSON.stringify({ ...identity, token: "fixture-token" }));
+      return identity;
+    };
+    const beforeMcp = join(temporary, "before-mcp");
+    const afterMcp = join(temporary, "after-mcp");
+    installRuntime(payload, store);
+    const stableMcp = spawnTestFixture("/bin/sh", [join(store, "mcp.sh"), beforeMcp], { cwd: data, stdio: "ignore" });
+    fixtures.push(stableMcp);
+    await waitFor(() => existsSync(beforeMcp));
+    assert.equal(realpathSync(readFileSync(beforeMcp, "utf8")), oldRuntime);
+    installRuntime(nextPayload, store);
+    const upgradedMcp = spawnTestFixture("/bin/sh", [join(store, "mcp.sh"), afterMcp], { cwd: data, stdio: "ignore" });
+    fixtures.push(upgradedMcp);
+    await waitFor(() => existsSync(afterMcp));
+    assert.equal(realpathSync(readFileSync(afterMcp, "utf8")), newRuntime);
+    process.kill(stableMcp.pid, 0);
+    assert.equal(realpathSync(readFileSync(beforeMcp, "utf8")), oldRuntime);
+    console.log("✓ 固定 MCP 入口跟随新版本，已启动的旧 MCP 保留原运行时");
+    const database = new DatabaseSync(join(data, "navi.db"));
+    database.exec("CREATE TABLE fixture(value TEXT); INSERT INTO fixture VALUES ('before migration')");
+    database.close();
+    setOptions({ shutdown: { version: 1, resources: [{ kind: "terminal", id: "external-terminal", label: "external terminal" }] } });
+    let service = await start();
+    const mcp = spawnTestFixture(join(oldRuntime, "node/bin/node"), [join(oldRuntime, "mcp/dist/index.js")], { cwd: data, stdio: "ignore" });
+    fixtures.push(mcp);
+    await runTestProcess("/bin/bash", [join(mac, "scripts/install-app.sh"), next, join(temporary, "Applications")], {
+      cwd: root, encoding: "utf8", timeout: 60_000,
+    });
+    await waitFor(() => existsSync(activity) && readFileSync(activity, "utf8") === "old");
+    process.kill(service.pid, 0);
+    process.kill(mcp.pid, 0);
+    assert.equal(readFileSync(join(payload, "version"), "utf8"), "new");
+    console.log("✓ 真实安装器在外置服务持有任务与退出资源、MCP 运行中换 app，旧进程持续读取旧版本");
+
+    const url = () => ({ NAVI_URL: `http://127.0.0.1:${service.port}`, NAVI_MAC_RUNTIME: payload });
+    setOptions({ impact: { ...empty, resumes: [{ id: "team", title: "active team" }] } });
+    assert.match(await drive("update", url()), /PROCEED/);
+    process.kill(service.pid, 0);
+    assert.match(await drive("stale", url()), /WAITING 切换新版服务/);
+    process.kill(service.pid, 0);
+    assert.equal(existsSync(requests), false, "known team blockers must never request a lease");
+    console.log("✓ 团队回合不阻止 Sparkle 换 app，服务接管延后且不弹强制中断选项");
+
+    setOptions({ impact: empty, gatewayUnavailable: true });
+    assert.match(await drive("stale", url()), /WAITING 切换新版服务/);
+    assert.equal(existsSync(requests), false, "disabled gateway without tasks must remain a side-effect-free wait");
+    process.kill(service.pid, 0);
+    setOptions({});
+
+    const lockReady = join(temporary, "legacy-ready");
+    const legacy = spawnTestFixture(process.execPath, ["-e", `
+      const fs = require('node:fs');
+      fs.openSync(${JSON.stringify(join(payload, ".in-use"))}, fs.constants.O_RDONLY | 0x10);
+      fs.writeFileSync(${JSON.stringify(lockReady)}, 'ready'); setInterval(() => {}, 1000);
+    `], { cwd: data, stdio: "ignore" });
+    fixtures.push(legacy);
+    await waitFor(() => existsSync(lockReady));
+    const blockedUpdate = await drive("update", url());
+    assert.match(blockedUpdate, /FAILED[\s\S]*PID/);
+    assert.ok(blockedUpdate.includes(String(legacy.pid)));
+    assert.match(blockedUpdate, /检查 Navi MCP 登记[\s\S]*mcp.sh/);
+    assert.doesNotMatch(blockedUpdate, /首次迁移/);
+    process.kill(service.pid, 0);
+    await legacy.dispose();
+    console.log("✓ 包内 MCP 持锁时列出进程与固定迁移入口，不误停外置服务");
+
+    rmSync(requests, { force: true });
+    setOptions({ omitPreflight: true });
+    assert.match(await drive("stale", url()), /WAITING/);
+    assert.equal(existsSync(requests), false, "an older service cannot silently acknowledge target-aware preflight");
+    process.kill(service.pid, 0);
+    setOptions({ rejectLease: true });
+    rmSync(requests, { force: true });
+    assert.match(await drive("rejected", url()), /FAILED[\s\S]*RETRY explicit blocked/);
+    const attempts = readFileSync(requests, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(attempts.filter((entry) => !entry.check && !entry.release).length, 2, "only an explicit retry may acquire again after execution refusal");
+    process.kill(service.pid, 0);
+    setOptions({ expired: true });
+    assert.match(await drive("stale", url()), /FAILED[\s\S]*重试/);
+    process.kill(service.pid, 0);
+    console.log("✓ 接管被拒或许可过期时旧服务继续运行");
+
+    const backups = join(data, "backups");
+    const savedBackups = join(data, "saved-backups");
+    if (existsSync(backups)) renameSync(backups, savedBackups);
+    try {
+      writeFileSync(backups, "cannot create backups directory");
+      setOptions({});
+      assert.match(await drive("stale", url()), /FAILED[\s\S]*旧服务未停止/);
+      process.kill(service.pid, 0);
+    } finally {
+      rmSync(backups, { force: true });
+      if (existsSync(savedBackups)) renameSync(savedBackups, backups);
+    }
+    console.log("✓ 备份失败不停止旧服务，也不开始迁移");
+
+    setOptions({});
+    assert.match(await drive("stale", url()), /PROCEED/);
+    await waitFor(() => { try { process.kill(service.pid, 0); return false; } catch { return true; } });
+    process.kill(mcp.pid, 0);
+    assert.ok(readdirSync(join(data, "backups")).some((name) => name.endsWith(".db")));
+    assert.match(readFileSync(requests, "utf8"), /"check":"lease"/);
+    assert.equal(readFileSync(join(oldRuntime, "version"), "utf8"), "old");
+    console.log("✓ detached/MCP 回合取得许可后服务下线，旧 MCP 与旧运行时保留");
+
+    rmSync(requests, { force: true });
+    setOptions({ impact: { ...empty, mcpDisrupted: [survivor] } });
+    service = await start(payload);
+    assert.match(await drive("legacy-wait", url()), /ASK LEGACY[\s\S]*WAITING/);
+    process.kill(service.pid, 0);
+    assert.equal(existsSync(requests), false);
+    setOptions({ impact: empty });
+    assert.match(await drive("legacy-idle", url()), /PROCEED/);
+    await waitFor(() => { try { process.kill(service.pid, 0); return false; } catch { return true; } });
+    assert.equal(existsSync(requests), false);
+    console.log("✓ 旧布局服务仍认作自家：有风险按旧闸等待，空闲时停服备份迁移，不申请外置接管许可");
+
+    const installMarker = join(app, "legacy-install-marker");
+    writeFileSync(installMarker, "keep");
+    setOptions({ impact: empty });
+    service = await start(payload);
+    for (const shutdown of [undefined, { version: 1, resources: [
+      { kind: "terminal", id: "legacy-terminal", label: "legacy terminal" },
+      { kind: "preview-trial", id: "legacy-preview", label: "legacy preview" },
+    ] }]) {
+      setOptions({ impact: empty, shutdown });
+      const refused = await runTestProcess("/bin/bash", [join(mac, "scripts/install-app.sh"), next, join(temporary, "Applications")], {
+        cwd: root, encoding: "utf8", timeout: 60_000,
+      }, 1);
+      assert.match(refused.stdout + refused.stderr, shutdown ? /legacy terminal[\s\S]*legacy preview/ : /退出清场清单/);
+      assert.match(refused.stderr, /检查 Navi MCP 登记[\s\S]*mcp.sh/);
+      assert.equal(readFileSync(installMarker, "utf8"), "keep");
+      process.kill(service.pid, 0);
+    }
+    console.log("✓ 合并后的旧布局安装仍拒绝缺失清场清单和存活退出资源，保留原包与原服务，并保留固定 MCP 迁移提示");
+    setOptions({ impact: empty, shutdown: { version: 1, resources: [] } });
+    await runTestProcess("/bin/bash", [join(mac, "scripts/install-app.sh"), next, join(temporary, "Applications")], {
+      cwd: root, encoding: "utf8", timeout: 60_000,
+    });
+    await waitFor(() => { try { process.kill(service.pid, 0); return false; } catch { return true; } });
+    assert.equal(existsSync(installMarker), false);
+    process.kill(stableMcp.pid, 0);
+    process.kill(upgradedMcp.pid, 0);
+    console.log("✓ 旧布局清场清单明确为空后才停止服务并换包，已有外置 MCP 不受影响");
+  }, [
+    async () => { for (const fixture of fixtures) await fixture.dispose(); },
+    () => rmSync(temporary, { recursive: true, force: true }),
+  ]);
+}

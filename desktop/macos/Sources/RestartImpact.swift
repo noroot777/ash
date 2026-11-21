@@ -20,6 +20,13 @@ struct RestartImpact: Decodable {
   let resumes: [Item]
   let interrupted: [Item]
   let mcpDisrupted: [Item]
+  struct Handover: Decodable {
+    struct Target: Decodable { let `protocol`: Int; let schema: String }
+    let blocked: [Item]
+    let sessions: [String]
+    let target: Target?
+  }
+  let runtimeHandover: Handover?
 
   /// 同一个任务两类都占时只算一次（interrupted 优先：它说的后果更重）。
   var disrupted: [(title: String, why: String)] {
@@ -59,8 +66,22 @@ enum ImpactVerdict {
 }
 
 enum RestartImpactProbe {
+  struct RecoveryAssessment {
+    let identity: ServiceRecoveryIdentity
+    let verdict: ImpactVerdict
+  }
+
+  static func assessRecoverySync() throws -> RecoveryAssessment {
+    guard case .navi(let instance) = NaviHealth.probeSync(),
+          let identity = ServiceRecoveryIdentity(instance) else {
+      throw SQLiteFile.Failure("无法确认本机外置旧服务的身份，未强制切换；旧服务和任务保持原样。")
+    }
+    return RecoveryAssessment(identity: identity,
+      verdict: askImpact(of: .ours(pid: identity.pid), instance: identity.id, preservingRuntime: false, recovery: true))
+  }
+
   /// 只在后台队列上调。
-  static func assessSync() -> ImpactVerdict {
+  static func assessSync(preservingRuntime: Bool = false) -> ImpactVerdict {
     guard NaviConfig.isLocal else { return .clear(.remote) }
     switch NaviHealth.probeSync() {
     case .down:
@@ -75,14 +96,22 @@ enum RestartImpactProbe {
       return .clear(.foreign(pid: instance.pid))
     case .navi(let instance):
       guard let pid = instance.pid, pid > 1 else { return .unknown("服务没报自己的进程号") }
-      return askImpact(of: .ours(pid: pid), instance: instance.id)
+      return askImpact(of: .ours(pid: pid), instance: instance.id, preservingRuntime: preservingRuntime)
     }
   }
 
   /// 带着认过的那一份的实例号问：问到之前端口换了人，新来的那份不答（server/src/instance-binding.ts），
   /// 闸拿不到别人的名单。
-  private static func askImpact(of target: ServiceTarget, instance: String?) -> ImpactVerdict {
-    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/restart-impact"), timeoutInterval: 8)
+  private static func askImpact(of target: ServiceTarget, instance: String?, preservingRuntime: Bool, recovery: Bool = false) -> ImpactVerdict {
+    var url = URLComponents(url: NaviConfig.baseURL.appendingPathComponent("api/restart-impact"), resolvingAgainstBaseURL: false)!
+    var nextSchema: String?
+    if preservingRuntime {
+      guard let next = RuntimeHandover.compatibility(), next["protocol"] as? Int == 1,
+            let schema = next["schema"] as? String else { return .unknown("新版接管协议无法核实") }
+      nextSchema = schema
+      url.queryItems = [URLQueryItem(name: "protocol", value: "1"), URLQueryItem(name: "schema", value: schema)]
+    }
+    var request = URLRequest(url: url.url!, timeoutInterval: 8)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     // 与 restart.mjs 同一张凭证：单实例锁里那串 token（文件 0600）。本机直连多半用不上，带着不吃亏。
     if let token = hostToken() { request.setValue(token, forHTTPHeaderField: "x-ash-host-token") }
@@ -98,19 +127,82 @@ enum RestartImpactProbe {
         verdict = .unknown("答复看不懂（服务端版本太旧？）")
         return
       }
-      let disrupted = impact.disrupted
+      if let nextSchema, impact.runtimeHandover?.target?.protocol != 1 || impact.runtimeHandover?.target?.schema != nextSchema {
+        verdict = .unknown("旧服务未核对新版兼容性，未切换服务")
+        return
+      }
+      if recovery {
+        var seen = Set<String>()
+        let affected = (impact.interrupted + impact.resumes + impact.survives + impact.mcpDisrupted
+          + (impact.runtimeHandover?.blocked ?? [])).filter { seen.insert($0.id).inserted }
+        verdict = affected.isEmpty ? .clear(target) : .disrupts(target, affected.map {
+          ($0.title, $0.reason ?? "强制切换不保证接管，任务或 MCP 交卷可能中断")
+        })
+        return
+      }
+      let disrupted = preservingRuntime
+        ? (impact.runtimeHandover?.blocked.map { (title: $0.title, why: $0.reason ?? "不可接管") }
+          ?? [(title: "旧服务", why: "没有可验证的安全接管能力")])
+        : impact.disrupted
       verdict = disrupted.isEmpty ? .clear(target) : .disrupts(target, disrupted)
     }.resume()
     done.wait()
     return verdict
   }
 
-  private static func hostToken() -> String? {
+  static func hostToken() -> String? {
     guard let db = try? DatabaseFile.existing(in: NaviConfig.dataURL) else { return nil }
     for lock in DatabaseFile.lockFiles(of: db) {
       if let data = try? Data(contentsOf: lock), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
          let token = json["token"] as? String { return token }
     }
     return nil
+  }
+}
+
+enum RuntimeHandover {
+  static func compatibility() -> [String: Any]? {
+    guard let data = try? Data(contentsOf: NaviConfig.targetRuntimeURL.appendingPathComponent(".handover.json")) else { return nil }
+    return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+  }
+
+  static func acquire(target: ServiceTarget?) -> String? {
+    guard case .ours(let pid) = target,
+          case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, instance.pid == pid,
+          let codeDir = instance.codeDir, RuntimeStore.contains(codeDir), let id = instance.id else { return nil }
+    guard let compatibility = compatibility(),
+          let result = send(instance: id, body: compatibility), let lease = result["lease"] as? String else { return nil }
+    guard result["protocol"] as? Int == 1 else { _ = send(instance: id, body: ["release": lease]); return nil }
+    return lease
+  }
+
+  static func release(_ lease: String) {
+    guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, let id = instance.id else { return }
+    _ = send(instance: id, body: ["release": lease])
+  }
+
+  static func isValid(_ lease: String) -> Bool {
+    guard case .navi(let instance) = NaviHealth.probeSync(), instance.isOurs, let id = instance.id else { return false }
+    return send(instance: id, body: ["check": lease])?["valid"] as? Bool == true
+  }
+
+  private static func send(instance: String, body: [String: Any]) -> [String: Any]? {
+    guard let token = RestartImpactProbe.hostToken() else { return nil }
+    var request = URLRequest(url: NaviConfig.baseURL.appendingPathComponent("api/runtime-handover"), timeoutInterval: 45)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "content-type")
+    request.setValue(token, forHTTPHeaderField: "x-navi-host-token")
+    request.setValue(instance, forHTTPHeaderField: "x-navi-instance")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    let done = DispatchSemaphore(value: 0)
+    var result: [String: Any]?
+    URLSession.shared.dataTask(with: request) { data, response, _ in
+      if (response as? HTTPURLResponse)?.statusCode == 200, let data {
+        result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+      }
+      done.signal()
+    }.resume()
+    done.wait()
+    return result
   }
 }

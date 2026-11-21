@@ -11,17 +11,17 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   const url = `${web.origin}/scripts/fixtures/composer-branches.html`;
   const objective = page.getByRole("textbox", { name: "任务目标" });
-  const directory = page.getByRole("button", { name: /^工作目录：/ });
+  // 从哪条分支开工常驻在卡片下面，下拉上写的就是当前选择。
+  const baseButton = page.getByRole("button", { name: /^base 分支/ });
   const submit = page.locator(".studio-card .send-key-main");
   const records = async () => JSON.parse(await page.getByTestId("created").innerText());
-  const directoryLabel = () => directory.getAttribute("aria-label");
-  const AUTOMATIC = "跟随项目分支（创建时确定）";
+  const directoryLabel = () => baseButton.innerText();
+  // 键上只写名字，括号里的说明在展开的菜单里。
+  const AUTOMATIC = "跟随项目分支";
   const expectAutomatic = () => waitUntil(async () => (await directoryLabel()).includes(AUTOMATIC), "工作目录回到「跟随项目分支」");
   const selectBase = async (name) => {
-    await directory.click();
-    await page.getByRole("button", { name: /^base 分支/ }).click();
+    await baseButton.click();
     await page.getByRole("option", { name, exact: typeof name === "string" }).click();
-    await page.keyboard.press("Escape");
   };
   const checkout = async (branch, pending = false) => {
     await page.locator(".workspace-git-context").click();
@@ -44,11 +44,7 @@ try {
   await objective.fill("新建面板打开后切换到升级分支");
   await checkout("version-upgrade");
   await expectAutomatic();
-  if (process.env.NAVI_BROWSER_SCREENSHOT) {
-    await directory.click();
-    await page.screenshot({ path: process.env.NAVI_BROWSER_SCREENSHOT, fullPage: true });
-    await page.keyboard.press("Escape");
-  }
+  if (process.env.NAVI_BROWSER_SCREENSHOT) await page.screenshot({ path: process.env.NAVI_BROWSER_SCREENSHOT, fullPage: true });
   const automatic = await create("默认分支跟随侧栏切换");
   assert.equal(automatic.worktreeBase, null);
   assert.equal(automatic.resolvedBase, "version-upgrade");
@@ -56,7 +52,7 @@ try {
 
   await selectBase("version-upgrade");
   await checkout("main");
-  assert.match(await directoryLabel(), /独立 worktree · version-upgrade/);
+  assert.match(await directoryLabel(), /version-upgrade/);
   assert.doesNotMatch(await directoryLabel(), /跟随/);
   const explicit = await create("手动指定分支不被侧栏覆盖");
   assert.equal(explicit.worktreeBase, "version-upgrade");

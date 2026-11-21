@@ -333,7 +333,7 @@ try {
     await setTaskStatus(broken.task.id, "running");
     assert.equal((await db.select().from(tasks).where(eq(tasks.id, broken.task.id)))[0].status, "running", "归档抛异常也不能让任务重跑失败");
     assert.equal(rerunGateClosed(broken.task.id), false);
-    assert.match(timeline(broken), /旧预览回收暂缓，任务继续运行/);
+    assert.match(timeline(broken), /预览启动回收暂缓，任务继续运行/);
     rmSync(obstruction, { recursive: true });
     assert.equal(await stopPreview(broken.task.id, null), true);
     console.log("✓ sweep tolerates ordinary run-directory files and isolates task failures while still pruning expired caches");
@@ -343,7 +343,7 @@ try {
     const s = await setup();
     const child = await sidecar(s);
     mkdirSync(join(root, "runs", s.task.id), { recursive: true });
-    writeRecord({ taskId: s.task.id, pid: child.parent.pid!, cmd: "detached sidecar", life: "manual", log: "", startedAt: new Date().toISOString(), port: null, url: null });
+    writeRecord({ taskId: s.task.id, pid: child.parent.pid!, cmd: "detached sidecar", life: "manual", log: "", startedAt: new Date().toISOString(), port: null, url: null, state: action === "rerun" ? "starting" : "ready" });
     try {
       if (action === "rerun") {
         await setTaskStatus(s.task.id, "running");

@@ -3,7 +3,8 @@
 // 要怎么改，发出去仍是计划模式下的一句普通回复，由出这份计划的同一个执行器接着改。
 import { useRef, useState, type KeyboardEvent } from "react";
 import { ArrowRight, CaretDown, PencilSimple } from "@phosphor-icons/react";
-import type { Task } from "@navi/shared";
+import type { AgentType, Task } from "@navi/shared";
+import { taskInteractionAvailability } from "@navi/shared/task-interaction";
 import type { ConversationItem } from "./conversationModel.ts";
 import type { ProposedPlanData } from "../components/ProposedPlan.tsx";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
@@ -13,21 +14,23 @@ import "../components/proposed-plan.css";
 
 export type ReadyPlan = {
   plan: ProposedPlanData;
+  agentType: AgentType;
   executorId: string | null;
   model: string | null;
   reasoningEffort: string | null;
 };
 
 export function readyPlanFor(task: Task, items: ConversationItem[]): ReadyPlan | null {
-  if (!task.codexPlanMode || task.mode !== "single" || task.archived || task.question || ["running", "queued"].includes(task.status)) return null;
+  if (!task.planMode || task.mode !== "single" || taskInteractionAvailability(task) === "archived" || task.question || ["running", "queued"].includes(task.status)) return null;
   const last = [...items].reverse().find((item) => item.kind === "agent");
-  if (!last || last.kind !== "agent" || last.agentType !== "codex" || last.sessionRole !== "single" || !last.endedAt || last.interrupted || last.reviewer) return null;
+  if (!last || last.kind !== "agent" || last.sessionRole !== "single" || !last.endedAt || last.interrupted || last.reviewer) return null;
   if (last.turnOutcome === "failed" || last.turnOutcome === "stopped" || last.session?.stoppedAs || (!last.turnOutcome && (last.session?.exitStatus ?? 0) !== 0)) return null;
   const executorId = last.session?.executorId ?? null;
-  if (!task.codexPlanScopes?.some((scope) => scope.executorId === executorId)) return null;
+  const scope = task.planScopes?.find((entry) => entry.agentType === last.agentType && entry.executorId === executorId);
+  if (!scope) return null;
   const plan = last.segments.flatMap((segment) => segment.events).filter((event) => event.plan).at(-1)?.plan;
   if (!plan || plan.status !== "complete" || !plan.text.trim()) return null;
-  return { plan, executorId, model: last.run?.model ?? null, reasoningEffort: last.run?.reasoningEffort ?? null };
+  return { plan, agentType: scope.agentType, executorId, model: last.run?.model ?? null, reasoningEffort: last.run?.reasoningEffort ?? null };
 }
 
 export type PlanTakeover = {

@@ -23,12 +23,12 @@ struct ServerRecord: Codable {
   var confirmedAt: Date? = nil
 
   /// 要起服务了：先记下是这一版。写不进去抛错，调用方就别起。
-  static func writeAttempt() throws {
-    try save(ServerRecord(pid: 0, bundleVersion: NaviConfig.bundleVersion, confirmedAt: read()?.confirmedAt))
+  static func writeAttempt(version: String = NaviConfig.bundleVersion) throws {
+    try save(ServerRecord(pid: 0, bundleVersion: version, confirmedAt: read()?.confirmedAt))
   }
 
-  static func write(pid: Int) {
-    try? save(ServerRecord(pid: pid, bundleVersion: NaviConfig.bundleVersion, confirmedAt: read()?.confirmedAt))
+  static func write(pid: Int, version: String = NaviConfig.bundleVersion) {
+    try? save(ServerRecord(pid: pid, bundleVersion: version, confirmedAt: read()?.confirmedAt))
   }
 
   /// 端口上自己那份应答了：是记录里那个进程，就确认它起来过。
@@ -67,6 +67,34 @@ enum ServiceTarget: Equatable {
   case ours(pid: Int)
 }
 
+struct ServiceRecoveryIdentity {
+  let id: String
+  let pid: Int
+  let dataDir: String
+  let codeDir: String
+
+  init?(_ instance: NaviInstance) {
+    guard NaviConfig.isLocal, instance.isOurs, let id = instance.id, !id.isEmpty,
+          let pid = instance.pid, pid > 1, let dataDir = instance.dataDir,
+          let codeDir = instance.codeDir, RuntimeStore.contains(codeDir) else { return nil }
+    self.id = id
+    self.pid = pid
+    self.dataDir = NaviHealth.realPath(dataDir)
+    self.codeDir = NaviHealth.realPath(codeDir)
+  }
+
+  func matches(_ instance: NaviInstance) -> Bool {
+    guard let current = ServiceRecoveryIdentity(instance) else { return false }
+    return id == current.id && pid == current.pid && dataDir == current.dataDir && codeDir == current.codeDir
+  }
+
+  func verify() throws {
+    guard case .navi(let instance) = NaviHealth.probeSync(), matches(instance) else {
+      throw SQLiteFile.Failure("服务身份已变化或无法确认，本次强制切换已取消；没有停止其他服务。")
+    }
+  }
+}
+
 /// 让自己那份服务下线，给换代码让路。只停**评估过的那一份**（UpdateGate 问 restart-impact 时
 /// 端口上的那个进程）：这会儿端口上换了人、或者认不出是谁，一律不停、回去重新评估 —— 不拿上一次
 /// 「不会打断谁」的结论去停另一份服务。别的 navi 用的不是这份库，跟这次更新无关，不碰。
@@ -84,7 +112,7 @@ enum ServerShutdown {
   }
 
   /// `target` 为 nil：用户在「确认不了」时点了「现在」—— 停那时候端口上自己那份，认不出是谁就不停。
-  static func stop(expecting target: ServiceTarget?, timeout: TimeInterval = 20) -> Result {
+  static func stop(expecting target: ServiceTarget?, timeout: TimeInterval = 20, identity: ServiceRecoveryIdentity? = nil) -> Result {
     if target == .remote { return .stopped(nil) }
     switch NaviHealth.probeSync() {
     case .down:
@@ -100,6 +128,7 @@ enum ServerShutdown {
       if case .ours = target { return .changed("端口上换成了别的 Navi") }
       return .stopped(nil)
     case .navi(let instance):
+      if let identity, !identity.matches(instance) { return .changed("服务身份已变化，本次强制切换已取消") }
       guard let pid = instance.pid, pid > 1 else { return .failed("服务没报自己的进程号，没法让它下线。") }
       if let target, target != .ours(pid: pid) { return .changed("服务换了一份（进程 \(pid)）") }
       guard let pid32 = Int32(exactly: pid) else { return .failed("服务的进程号不对：\(pid)") }

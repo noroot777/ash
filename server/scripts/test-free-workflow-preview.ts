@@ -293,7 +293,7 @@ try {
     writeFileSync(join(runsDir, "preview.json"), JSON.stringify({
       taskId: rerunId, cmd: "npm run dev", pid: stubborn.pid, url: "http://localhost:1/", port: 1, life: "task",
       startedAt: new Date().toISOString(), log: join(runsDir, "preview.log"), links: [],
-      state: "ready", gen: "old-gen", installPid: null,
+      state: "starting", gen: "old-gen", installPid: null,
     }));
 
     const flipping = setTaskStatus(rerunId, "running");

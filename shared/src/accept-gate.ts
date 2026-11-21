@@ -291,6 +291,53 @@ export type AcceptGateState = {
  * 验收确认层点确认时送去记住的那两勾(server accept-memory.ts)。只送这一按真做了选择的那几项:
  * 有一次还作数的通过时「运行」默认是沿用、勾上是一次性重跑,都不送 skipGate。
  */
-export type AcceptMemoryWrite = { skipGate?: boolean; commit?: boolean };
+export type AcceptMemoryWrite = { skipGate?: boolean; commit?: boolean; push?: boolean };
 /** 写完之后的样子;commitSaved=false = 没有项目管理权限,「提交」只管了这一次。 */
-export type AcceptMemoryWriteResult = { skipGate: boolean; commit: boolean; commitSaved: boolean };
+export type AcceptMemoryWriteResult = { skipGate: boolean; commit: boolean; commitSaved: boolean; push: boolean };
+
+/**
+ * 验收确认层「推送」那一步要的事实（GET /tasks/:id/accept-push，只读本地不连远程）。
+ * destination = 推到哪；null 时 unavailable 说为什么（不合并、只打标签、没有远程、目标是别的任务分支…）。
+ * remembered = 这个人在这个项目里上一次确认时勾没勾它（server/src/accept-memory.ts）。
+ */
+export type AcceptPushView = {
+  destination: AcceptPushDestination | null;
+  unavailable: string | null;
+  remembered: boolean;
+};
+
+/**
+ * 推到哪：本地目标分支 → 远程名/远程分支，身份以推送地址为准。`url` 是**脱敏过**的推送地址，只给人看；
+ * `fingerprint` 是服务端对真实目的地算的指纹（server/src/accept-push-destination.ts）。确认层把它原样发回
+ * /accept，服务端按执行那一刻解析出的真实目的地重算，对不上就拒（server/src/task-accept-push.ts）。
+ */
+export type AcceptPushDestination = { branch: string; remote: string; remoteBranch: string; url: string; fingerprint: string };
+
+/** 从不可信输入里认出一份推送目的地（请求体、存下来的门禁选择）；认不出返回 null。 */
+export function parsePushDestination(raw: unknown): AcceptPushDestination | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { branch, remote, remoteBranch, url, fingerprint } = raw as Record<string, unknown>;
+  return [branch, remote, remoteBranch, url, fingerprint].every((v) => typeof v === "string" && v.length > 0)
+    ? { branch: branch as string, remote: remote as string, remoteBranch: remoteBranch as string, url: url as string,
+      fingerprint: fingerprint as string } : null;
+}
+
+/**
+ * 请求体 / 存下来的门禁选择里那一项 push（`true` 由调用方自己认）：没给 = null；认得 = 目的地；给了却认不出
+ * （上一版没有指纹、坏值）= "stale" —— 那是用户明确选了推送、只是确认失效了，不能当「没选推送」照常合并清理，
+ * 调用方拒绝、让他重新确认（server/src/task-accept-push.ts preparePush）。
+ */
+export function parsePushChoice(raw: unknown): AcceptPushDestination | "stale" | null {
+  if (raw === undefined || raw === null || raw === false) return null;
+  return parsePushDestination(raw) ?? "stale";
+}
+
+/**
+ * 选了推送时推没推上去（server/src/task-accept-push.ts）。推上去之后才快进本地目标分支：快进不了（本地期间被挪了、
+ * 检出里的改动会被覆盖）时 `localBehind` 写明原因 —— 远程已经是这次合并，本地落后，pull 一下就好。
+ */
+export type AcceptPushOutcome =
+  | { ok: true; remote: string; remoteBranch: string; commit: string; upToDate: boolean; localBehind?: string;
+      /** git 推送时自己报出的目的地址（已脱敏）；没真推（远程本来就含着）时没有。 */
+      to?: string }
+  | { ok: false; remote: string; remoteBranch: string; reason: "push_rejected" | "push_failed"; message: string };

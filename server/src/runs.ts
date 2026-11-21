@@ -2,7 +2,7 @@ import { cleanupDetail, cleanupSettled, type CleanupResult } from "./executors/k
 import type { AgentType } from "@navi/shared";
 import type { SteerText } from "./executors/types.js";
 import type { CliCommand, CliGoal } from "@navi/shared/cli-commands";
-import { RECONCILE_TURN_ROLE, claimNonTurn, whenTurnIdle } from "./turn-lock.js";
+import { RECONCILE_TURN_ROLE, claimNonTurn, claimOwnTurnWhenReady, releaseTurn, whenTurnIdle } from "./turn-lock.js";
 import { acknowledgeStartReceipt, registerStartReceipt } from "./task-start-receipt.js";
 import { markTaskActionsDirty } from "./task-actions-dirty.js";
 
@@ -10,7 +10,7 @@ import { markTaskActionsDirty } from "./task-actions-dirty.js";
 // turn-lock.ts —— 两摊各自的使用方几乎不重叠,挤在一个文件里已经过了 700 行上限
 // (第 3 轮审查 F3)。八十多个文件照旧从这里 import,所以原样转出去。
 export {
-  ACCEPT_HOLD_ROLE, bindTurnToken, claimAcceptanceHold, claimIdleWorkspaceTurns, claimOwnTurn, claimTurn, claimWakeTurn,
+  ACCEPT_HOLD_ROLE, bindTurnToken, claimAcceptanceHold, claimIdleWorkspaceTurns, claimOwnTurn, claimOwnTurnWhenReady, claimTurn, claimWakeTurn, claimWakeTurnWhenReady,
   claimWorkspaceTurn, freezeStartingTurn, heldForAcceptance, isTurnClaimed, reclaimTurn, turnBusyText,
   releaseHeldTurn, releaseTurn, SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, takeStartFreezeDetail, turnIdentity,
   turnRole, turnSourceReview, turnSourceRole, waitForTurnIdle, whenTurnIdle,
@@ -407,4 +407,12 @@ export class CanceledRun extends Error {
 export function claimReconcileTurn(taskId: string): (() => void) | null {
   if (isRunning(taskId)) return null;
   return claimNonTurn(taskId, RECONCILE_TURN_ROLE);
+}
+
+export async function claimReconcileTurnWhenReady(taskId: string): Promise<(() => void) | null> {
+  if (isRunning(taskId)) return null;
+  const owner = await claimOwnTurnWhenReady(taskId, RECONCILE_TURN_ROLE);
+  if (!owner) return null;
+  if (isRunning(taskId)) { releaseTurn(taskId, owner); return null; }
+  return () => { releaseTurn(taskId, owner); };
 }
