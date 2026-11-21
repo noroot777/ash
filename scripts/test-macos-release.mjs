@@ -20,7 +20,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { verifyDownload } from "../desktop/macos/scripts/init-download-page.mjs";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,6 +88,8 @@ function dmgContents(dmg) {
       applications: applications.isSymbolicLink() ? readlinkSync(join(mount, "Applications")) : null,
       layout: readFileSync(join(mount, ".DS_Store")),
       binary: readFileSync(join(mount, "Navi.app/Contents/MacOS/Navi"), "utf8"),
+      executable: lstatSync(join(mount, "Navi.app/Contents/MacOS/Navi")).mode & 0o111,
+      alias: readlinkSync(join(mount, "Navi.app/Contents/MacOS/Navi-link")),
     };
   } finally {
     spawnSync("hdiutil", ["detach", mount, "-force"], { encoding: "utf8" });
@@ -111,8 +113,12 @@ async function localRehearsal() {
     { encoding: "utf8", env: { ...cleanEnv, NAVI_MAC_RELEASE_ARTIFACTS: artifacts } });
   const appcast = () => readFileSync(join(feed, "appcast.xml"), "utf8");
 
-  let result = release(fakeApp("20000101.0001", key.publicKey), key.file);
+  const firstApp = fakeApp("20000101.0001", key.publicKey);
+  chmodSync(join(firstApp, "Contents/MacOS/Navi"), 0o755);
+  symlinkSync("Navi", join(firstApp, "Contents/MacOS/Navi-link"));
+  let result = release(firstApp, key.file);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  for (const label of ["app.digest", "dmg.pack", "dmg.stage-copy", "dmg.image-create"]) assert.ok(result.stdout.includes(`[mac-timing] ${label}:`), `missing timing for ${label}`);
   const first = join(feed, "Navi-0.2.0.dmg");
   assert.ok(existsSync(first));
   assert.deepEqual(readdirSync(feed).sort(), ["Navi-0.2.0.dmg", "appcast.xml", "legacy-appcast.xml"], "only a dmg, no zip (plus the notice for pre-rename apps)");
@@ -124,6 +130,8 @@ async function localRehearsal() {
   assert.equal(contents.applications, "/Applications");
   assert.deepEqual(contents.layout, readFileSync(join(mac, "dmg/DS_Store")), "the checked-in layout");
   assert.equal(contents.binary, "binary 20000101.0001", "the app that was given");
+  assert.equal(contents.executable, 0o111, "clone staging preserves executable modes");
+  assert.equal(contents.alias, "Navi", "clone staging preserves symlinks rather than dereferencing them");
   const signature = appcast().match(/sparkle:edSignature="([^"]+)"/)[1];
   verifyDownload(readFileSync(first), signature, key.publicKey);
   assert.equal(verify(first, signature), 0, "the dmg verifies against the signature in the appcast");

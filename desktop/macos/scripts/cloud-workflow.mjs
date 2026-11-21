@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compareVersions } from "./appcast.mjs";
-import { appDigest, appInfo, packApp } from "./release-artifacts.mjs";
+import { appDigest, appInfo, copyApp, packApp } from "./release-artifacts.mjs";
 import { GitHub } from "./github.mjs";
 import { assertVersion, itemDetails, latestItem, nextBuildNumber, readConfig, runName, sourceVersion } from "./release-state.mjs";
 import { architectureConfig, assertArchitecture, distributionName, recoveryName, releaseNames } from "./architecture.mjs";
 import { verifyNativeArchitecture } from "./smoke-distribution.mjs";
 import { readPublicFeed } from "./public-feed.mjs";
+import { timed } from "./timing.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const MAC = join(ROOT, "desktop/macos");
@@ -88,13 +89,13 @@ export function verifyBundle(directory, expected) {
   assert.equal(info.CFBundleVersion, manifest.buildNumber);
   assert.equal(info.NaviArchitecture ?? "arm64", architecture, "app 架构与恢复清单不符");
   assert.ok(manifest.source.startsWith(info.NaviSourceCommit) && /^[a-f0-9]{7,40}$/.test(info.NaviSourceCommit));
-  assert.equal(appDigest(app), manifest.appDigest, "app 内容与恢复清单不符");
+  assert.equal(timed("app.verify-digest", () => appDigest(app)), manifest.appDigest, "app 内容与恢复清单不符");
   assert.match(manifest.tag, /^[\w.-]+$/);
   const legacy = manifest.tag.endsWith(`${manifest.version}-${manifest.buildNumber}`);
   assert.ok(legacy || manifest.tag.endsWith(manifest.version), "恢复产物 tag 与版本不符");
   const name = distributionName(legacy ? `${manifest.version}-${manifest.buildNumber}` : manifest.version, architecture);
   const dmg = join(payload, "artifacts", manifest.tag, name);
-  assert.equal(sha256(dmg), manifest.dmgSha256, "dmg 与保存的原包不同");
+  assert.equal(timed("dmg.verify-digest", () => sha256(dmg)), manifest.dmgSha256, "dmg 与保存的原包不同");
   assert.equal(readFileSync(`${dmg}.source`, "utf8").trim(), manifest.appDigest);
   return { manifest, app, dmg, artifacts: join(payload, "artifacts") };
 }
@@ -104,34 +105,34 @@ export function buildBundle(directory, request, { root = ROOT, build = true } = 
   assert.ok(request.buildNumber, "首次构建必须已经分配构建号");
   assert.equal(run("git", ["rev-parse", "HEAD"], { cwd: root }), request.source, "未检出要求的源码提交");
   assert.equal(sourceVersion(readFileSync(join(root, "desktop/macos/build.sh"), "utf8")), request.version);
-  if (build) run("bash", [join(root, "desktop/macos/build.sh")], {
+  if (build) timed("app.build", () => run("bash", [join(root, "desktop/macos/build.sh")], {
     cwd: root, stdio: "inherit", env: { ...process.env, NAVI_MAC_BUILD_NUMBER: request.buildNumber, NAVI_MAC_ARCH: config.architecture },
-  });
+  }));
   const payload = join(directory, "payload");
   if (existsSync(payload)) throw new Error("恢复产物目录已存在，不能覆盖后重新封包");
   mkdirSync(payload, { recursive: true });
   const app = join(payload, "Navi.app");
-  cpSync(join(root, "desktop/macos/build/Navi.app"), app, { recursive: true, verbatimSymlinks: true });
+  copyApp(join(root, "desktop/macos/build/Navi.app"), app);
   const { tag, name } = releaseNames(config, request.version, request.buildNumber);
   const dmg = packApp(app, join(payload, "artifacts", tag), name);
-  const manifest = { ...request, tag, appDigest: appDigest(app), dmgSha256: sha256(dmg) };
+  const manifest = { ...request, tag, appDigest: readFileSync(`${dmg}.source`, "utf8").trim(), dmgSha256: timed("dmg.digest", () => sha256(dmg)) };
   writeFileSync(join(payload, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   verifyBundle(directory, request);
-  run("tar", ["-cpf", join(directory, "bundle.tar"), "-C", directory, "payload"]);
+  timed("recovery.archive", () => run("tar", ["-cpf", join(directory, "bundle.tar"), "-C", directory, "payload"]));
   return manifest;
 }
 
 export function restoreBundle(directory, request) {
   if (existsSync(join(directory, "payload"))) throw new Error("恢复目录已存在，不覆盖现场");
-  run("tar", ["-xpf", join(directory, "bundle.tar"), "-C", directory]);
+  timed("recovery.restore", () => run("tar", ["-xpf", join(directory, "bundle.tar"), "-C", directory]));
   return verifyBundle(directory, request);
 }
 
 export function verifyDistribution(directory, request) {
   const bundle = verifyBundle(directory, request);
-  run("codesign", ["--verify", "--deep", "--strict", bundle.app], { stdio: "inherit" });
-  run("hdiutil", ["verify", bundle.dmg], { stdio: "inherit" });
-  verifyNativeArchitecture(bundle.app, request.architecture ?? "arm64");
+  timed("app.verify-signature", () => run("codesign", ["--verify", "--deep", "--strict", bundle.app], { stdio: "inherit" }));
+  timed("dmg.verify-image", () => run("hdiutil", ["verify", bundle.dmg], { stdio: "inherit" }));
+  timed("app.verify-architecture", () => verifyNativeArchitecture(bundle.app, request.architecture ?? "arm64"));
   return bundle;
 }
 

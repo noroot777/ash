@@ -15,11 +15,19 @@ OUT="${2:?用法：make-dmg.sh <Navi.app> <输出.dmg>}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 [[ -d "$APP/Contents" ]] || { echo "✕ $APP 不是一个 .app" >&2; exit 1; }
 
+timed() {
+  local label="$1" started="$SECONDS" status=0
+  shift
+  "$@" || status=$?
+  printf '[mac-timing] %s: %ss status=%s\n' "$label" "$((SECONDS - started))" "$status"
+  return "$status"
+}
+
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/navi-dmg.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 # 卷里的名字固定叫 Navi.app（布局按这个名字摆图标），不管源目录叫什么。
-ditto "$APP" "$STAGE/Navi.app"
+timed dmg.stage-copy /bin/cp -cRp "$APP" "$STAGE/Navi.app"
 ln -s /Applications "$STAGE/Applications"
 cp "$HERE/../dmg/DS_Store" "$STAGE/.DS_Store"
 rm -f "$OUT"
-hdiutil create -quiet -volname Navi -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$OUT"
+timed dmg.image-create hdiutil create -quiet -volname Navi -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$OUT"
