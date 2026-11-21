@@ -245,7 +245,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   },
   {
     // 服务、浏览器也走「用过才浮现」（开合由 useTaskInspectorStack 按运行环境翻）：智能体托管过服务、
-    // 开过共享浏览器才冒到图标条上。浏览器是宽格，智能体一开它就自动切过去（RuntimeAutoOpen）。
+    // 开过共享浏览器才冒到图标条上。
     id: "service",
     cluster: 3,
     title: "服务",

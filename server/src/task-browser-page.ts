@@ -40,7 +40,7 @@ export async function operateBrowserPage(page: Page, input: BrowserUserAction, b
   else if (input.action === "reload") await page.reload({ waitUntil: "domcontentloaded" });
   else if (input.action === "back") await page.goBack({ waitUntil: "domcontentloaded" });
   else if (input.action === "forward") await page.goForward({ waitUntil: "domcontentloaded" });
-  else if (input.action === "resize") await page.setViewportSize(browserViewport(input.width, input.height));
+  else if (input.action === "resize" || input.action === "viewport") await page.setViewportSize(browserViewport(input.width, input.height));
   else if (input.action === "scroll") await page.mouse.wheel(0, input.direction === "down" ? 560 : -560);
   else if (input.action === "press") await page.keyboard.press(input.key);
   else if (input.action === "type") await page.keyboard.insertText(input.text);

@@ -1,6 +1,14 @@
 import type { FreeWorkflowPreviewState } from "./free-workflow.ts";
 
 export type BrowserControl = "agent" | "user";
+export type BrowserDisplayMode = "responsive" | "scaled";
+export interface ComputerUseFrame {
+  path: string;
+  tool: string;
+  at: string;
+  sessionId: string;
+  turnStartedAt: string;
+}
 export interface BrowserTarget {
   ref: string;
   role: string;
@@ -21,6 +29,7 @@ export interface TaskBrowserState {
   hasFrame: boolean;
   error: string | null;
   activity: { at: string; action: string; error?: string }[];
+  display?: { mode: BrowserDisplayMode; width: number; height: number };
 }
 
 export type BrowserAction =
@@ -35,6 +44,7 @@ export type BrowserAction =
   | { action: "resize"; width: number; height: number };
 
 export type BrowserUserAction = BrowserAction
+  | { action: "viewport"; width: number; height: number; mode: BrowserDisplayMode }
   | { action: "takeover" | "release" }
   | { action: "pointer"; x: number; y: number }
   | { action: "type"; text: string };
@@ -49,6 +59,7 @@ export interface BrowserObservation {
 export interface TaskRuntimeState {
   service: FreeWorkflowPreviewState | null;
   browser: TaskBrowserState | null;
+  computer?: ComputerUseFrame | null;
 }
 
 export function parseBrowserAction(value: unknown): BrowserUserAction {
@@ -76,6 +87,9 @@ export function parseBrowserAction(value: unknown): BrowserUserAction {
       if (body.direction !== "up" && body.direction !== "down") throw new Error("滚动方向无效");
       return { action: "scroll", direction: body.direction };
     case "resize": return { action: "resize", ...size() };
+    case "viewport":
+      if (body.mode !== "responsive" && body.mode !== "scaled") throw new Error("浏览器显示模式无效");
+      return { action: "viewport", mode: body.mode, ...size() };
     case "pointer":
       if (typeof body.x !== "number" || typeof body.y !== "number") throw new Error("点击位置无效");
       return { action: "pointer", x: body.x, y: body.y };

@@ -10,6 +10,7 @@ import { isTokenUsage, isUsageAccountingMark } from "@navi/shared/usage";
 import { textAnchorOf, type RecordIdentity, type TextAnchor } from "@navi/shared/session-output";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
 import { closeProse, sentinelIdentity, traceRecord } from "./transcript-identity.js";
+import { recordComputerFrame } from "./computer-preview.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" | "plan" }>;
 type TraceTextEvent = { kind: "text"; text: string };
@@ -77,6 +78,7 @@ export function appendSessionTrace(
   try {
     mkdirSync(dirname(path), { recursive: true });
     appendFileSync(path, `${JSON.stringify({ at, turnStartedAt, ...(record ?? {}), event } satisfies SessionTraceEntry)}\n`);
+    if (event.kind !== "run") recordComputerFrame(taskId, sessionId, turnStartedAt, at, event);
   } catch (error) {
     // Trace persistence is diagnostic UI state. A disk failure must not alter the
     // executor's outcome, but it must remain visible to operators.

@@ -42,6 +42,7 @@ function imageBlock(value: unknown): ImageBytes | null {
   const block = record(value);
   if (!block) return null;
   if (typeof block.image_url === "string") return dataUrl(block.image_url);
+  if (typeof block.imageUrl === "string") return dataUrl(block.imageUrl);
   if (block.type !== "image") return null;
   if (typeof block.data === "string" && typeof block.mimeType === "string") {
     return { mime: block.mimeType, bytes: Buffer.from(block.data, "base64") };
@@ -143,13 +144,13 @@ function storeImage(
 export function persistToolResultImages(
   value: unknown,
   seen: ImageStore = imageStore(),
-  options: { allowBareBase64?: boolean; directory?: string } = {},
+  options: { allowBareBase64?: boolean; directory?: string; includeExisting?: boolean } = {},
 ): string[] {
   const directory = options.directory ?? UPLOADS_DIR;
   return resultImages(value, !!options.allowBareBase64)
     .map((image, index) => storeImage(image, seen, directory, index))
     // 只报**新落盘**的那几份:工具把同一张图交两次时,卡片不该铺两张。
-    .map((stored) => (stored.path && stored.fresh ? stored.path : null))
+    .map((stored) => (stored.path && (stored.fresh || options.includeExisting) ? stored.path : null))
     .filter((path): path is string => !!path);
 }
 

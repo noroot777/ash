@@ -1,0 +1,19 @@
+.runtime-activity-preview {
+  position: absolute; z-index: 8; top: 64px; right: 16px; width: min(304px, calc(100% - 32px));
+  overflow: hidden; border: 0.5px solid var(--line2); border-radius: var(--r-lg); background: var(--panel);
+  box-shadow: 0 8px 32px -12px rgb(0 0 0 / .24);
+}
+.runtime-activity-preview.is-collapsed { width: auto; }
+.runtime-activity-preview header { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 4px 8px 4px 12px; color: var(--muted); font-size: var(--t-xs); }
+.runtime-activity-preview header > span { flex: 1; margin-right: 8px; }
+.runtime-activity-preview header button { display: grid; flex: none; width: 26px; height: 26px; place-items: center; border: 0; border-radius: var(--r-sm); background: transparent; color: inherit; }
+.runtime-activity-preview button:hover { background: var(--hover-bg); color: var(--ink); }
+.runtime-activity-preview :focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+.runtime-activity-preview img { display: block; width: 100%; max-height: 200px; object-fit: contain; background: var(--canvas); cursor: zoom-in; }
+.runtime-activity-image { display: block; width: 100%; min-height: 100px; padding: 0; border: 0; background: var(--canvas); }
+.runtime-activity-image img { cursor: pointer; }
+.runtime-activity-image > span, .runtime-activity-preview > p { display: block; margin: 0; padding: 12px; color: var(--muted); font-size: var(--t-xs); }
+@media (max-width: 720px) {
+  .runtime-activity-preview { top: 56px; right: 8px; width: min(200px, calc(100% - 16px)); }
+  .runtime-activity-preview img { max-height: 128px; }
+}

@@ -24,6 +24,7 @@ const { readAnyPreview, alive } = await import("../src/preview-store.js");
 const { taskBrowserState, closeTaskBrowser } = await import("../src/task-browser.js");
 const { browserFile } = await import("../src/task-browser-store.js");
 const { startDevelopmentService } = await import("../src/task-runtime-service.js");
+const { appendSessionTrace } = await import("../src/transcript.js");
 const screenshots = process.env.NAVI_RUNTIME_SCREENSHOTS || join(root, "screenshots");
 mkdirSync(screenshots, { recursive: true });
 const repo = join(root, "repo");
@@ -89,7 +90,7 @@ try {
     endPreviewStart("runtime", userStarting);
     endPreviewStart("runtime", agentStarting);
   }
-  assert.deepEqual(await okJson(await request("runtime")), { service: null, browser: null });
+  assert.deepEqual(await okJson(await request("runtime")), { service: null, browser: null, computer: null });
   assert.equal((await request("runtime/service", "POST", { command: "node service.cjs" })).status, 409);
   assert.equal((await request("runtime/service", "POST", { command: "node service.cjs" }, { ...agentHeaders, [NAVI_HEADERS.directionToken]: "old" })).status, 409);
   assert.equal((await request("runtime/service", "POST", { command: "node service.cjs" }, { ...agentHeaders, [NAVI_HEADERS.sourceTaskId]: "other", [NAVI_HEADERS.turnToken]: "turn-other" })).status, 409);
@@ -113,6 +114,7 @@ try {
   assert.match(taskBrowserState("runtime")!.error!, /不可用/);
   if (realChrome) process.env.CHROME_BIN = realChrome; else delete process.env.CHROME_BIN;
   let observed = await action({ action: "open", width: 1280, height: 800, screenshot: true }, false);
+  assert.deepEqual(observed.state.display, { mode: "scaled", width: 1280, height: 800 });
   let browserId = observed.state.id;
   assert.equal(observed.state.control, "agent");
   assert.equal((await request("runtime/browser", "POST", { action: "reload", id: browserId })).status, 409);
@@ -141,6 +143,11 @@ try {
   assert.match(observed.text, /等待保存/);
   const name = observed.targets.find((target) => target.name === "成员姓名")!;
   assert.ok(name?.ref);
+  assert.equal((await request("runtime/browser", "POST", { action: "viewport", id: browserId, mode: "responsive", width: 640, height: 800 }, agentHeaders)).status, 409);
+  const fitted = await action({ action: "viewport", id: browserId, mode: "responsive", width: 640, height: 800 }, false);
+  assert.equal(fitted.state.control, "agent");
+  assert.equal(fitted.state.width, 640);
+  assert.deepEqual(fitted.state.display, { mode: "responsive", width: 1280, height: 800 });
   assert.equal((await request("runtime/browser", "POST", { action: "resize", id: browserId, width: 100, height: 800 }, agentHeaders)).status, 409);
   observed = await action({ action: "fill", id: browserId, ref: name.ref, text: "智能体已验证" });
   assert.equal((await request("runtime/browser", "POST", { action: "click", id: browserId, ref: name.ref }, agentHeaders)).status, 409);
@@ -151,6 +158,7 @@ try {
   assert.equal(observed.state.error, null);
   if (process.env.NAVI_RUNTIME_SERVER_ONLY !== "1") {
     await action({ action: "close", id: browserId });
+    appendSessionTrace("runtime", "computer-session", stamp, { kind: "attachment", path: "/data/uploads/runtime-computer.png", computer: "cua_repl.js" });
     const { launchChrome, startWebServer } = await import("../../web/scripts/dom-stage.mjs");
     web = await startWebServer();
     uiBrowser = await launchChrome();
@@ -170,8 +178,10 @@ try {
     await page.route("**/api/**", async (route: any) => {
       const req = route.request();
       const url = new URL(req.url());
+      if (url.pathname === "/api/uploads/runtime-computer.png") return route.fulfill({ contentType: "image/png", body: readFileSync(browserFile("runtime", "png")) });
+      const layoutAction = req.method() === "POST" && req.postDataJSON()?.action === "viewport";
       if (req.method() === "POST" && url.pathname === "/api/tasks/runtime/runtime/browser") {
-        browserPosts += 1;
+        if (!layoutAction) browserPosts += 1;
         if (refuseOpen && JSON.parse(req.postData() ?? "{}").action === "open") {
           const error = refuseOpen;
           refuseOpen = "";
@@ -184,7 +194,7 @@ try {
         await new Promise<void>((resolve) => { releaseHeld = resolve; heldSeen?.(); });
       }
       if (pollGate && req.method() === "GET" && url.pathname === "/api/tasks/runtime/runtime") await pollGate;
-      if (holdAction && req.method() === "POST" && url.pathname === "/api/tasks/runtime/runtime/browser") {
+      if (holdAction && !layoutAction && req.method() === "POST" && url.pathname === "/api/tasks/runtime/runtime/browser") {
         // 动作在后端照常执行，只是把真实响应晚一点交回页面。
         holdAction = false;
         const response = await app.request(url.pathname + url.search, { method: req.method(), headers: req.headers(), body: req.postData() ?? undefined });
@@ -203,16 +213,51 @@ try {
     await tab("服务").waitFor();
     await tab("浏览器").waitFor();
     assert.equal(await pane.count(), 0);
+    const computer = page.getByRole("complementary", { name: "电脑操作" });
+    const computerImage = computer.getByRole("button", { name: "电脑操作的最近截图" });
+    await computerImage.waitFor();
+    await page.waitForFunction(() => document.querySelector<HTMLImageElement>('.runtime-activity-preview[aria-label="电脑操作"] img')!.naturalWidth > 0);
+    await page.screenshot({ path: join(screenshots, "computer-use-preview.png") });
+    await computer.getByRole("button", { name: "收起操作预览" }).click();
+    await page.reload();
+    await computer.getByRole("button", { name: "展开操作预览" }).waitFor();
+    assert.equal(await computerImage.count(), 0);
+    await computer.getByRole("button", { name: "展开操作预览" }).click();
+    await computerImage.click();
+    await page.getByRole("dialog").waitFor();
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
     await tab("服务").click();
     await page.getByRole("region", { name: "服务日志" }).getByText(/node service.cjs/).waitFor();
     assert.ok(await page.getByRole("link", { name: "打开", exact: true }).count());
     await page.screenshot({ path: join(screenshots, "runtime-service-inspector.png") });
-    // 智能体一开浏览器，右栏自己切到「浏览器」那一格，宽到跟会话大约五五开。
     await tab("信息").click();
     observed = await action({ action: "open" });
     browserId = observed.state.id;
+    const mini = page.getByRole("complementary", { name: "浏览器操作" });
+    await mini.getByRole("img").waitFor();
+    assert.equal(await pane.count(), 0);
+    assert.ok((await mini.boundingBox())!.width <= 304);
+    await page.screenshot({ path: join(screenshots, "shared-browser-mini.png") });
+    await mini.getByRole("button", { name: "展开共享浏览器" }).click();
     await page.getByRole("button", { name: "接管", exact: true }).waitFor();
     await pane.getByRole("img").waitFor();
+    await page.waitForFunction(() => {
+      const viewport = document.querySelector<HTMLElement>(".task-browser-viewport")!;
+      const image = viewport.querySelector("img")!;
+      return image.naturalWidth === viewport.clientWidth && image.naturalHeight === viewport.clientHeight;
+    });
+    assert.equal(await mini.count(), 0);
+    await page.screenshot({ path: join(screenshots, "shared-browser-responsive.png") });
+    await pane.getByRole("button", { name: "完整画面", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector<HTMLImageElement>(".task-browser-viewport img")?.naturalWidth === 1280);
+    assert.equal(taskBrowserState("runtime")?.display?.mode, "scaled");
+    await page.screenshot({ path: join(screenshots, "shared-browser-scaled.png") });
+    await pane.getByRole("button", { name: "自适应", exact: true }).click();
+    await page.waitForFunction(() => {
+      const viewport = document.querySelector<HTMLElement>(".task-browser-viewport")!;
+      return viewport.querySelector("img")!.naturalWidth === viewport.clientWidth;
+    });
     const share = await page.evaluate(() => document.querySelector(".inspector-host")!.getBoundingClientRect().width / window.innerWidth);
     assert.ok(share > 0.45 && share < 0.55, `浏览器那一格约占一半宽，实际 ${share}`);
     assert.equal(taskBrowserState("runtime")?.control, "agent");
@@ -319,7 +364,7 @@ try {
     const reopened = (await action({ action: "open" }, false)).state.id;
     assert.notEqual(reopened, replacedId);
     await page.getByRole("button", { name: "切换任务", exact: true }).click();
-    await tab("浏览器").click();
+    await tab("浏览器").waitFor();
     await page.getByRole("button", { name: "接管", exact: true }).waitFor();
     let openGate!: () => void;
     pollGate = new Promise<void>((resolve) => { openGate = resolve; });

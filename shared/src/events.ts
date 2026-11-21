@@ -65,7 +65,7 @@ export type AgentEvent =
   // `pos` = 这处引用在它那份文档全文里的绝对起点 —— 引用的**文档节点身份**。恢复补回的
   // 记录只能排在既有 trace 之后,事件顺序不再天然等于文档顺序;展示端按 pos 把同目的地的
   // 记录排回文档顺序再配对(审查第 8 轮 R1:重启接回后红蓝对调)。缺省 = 老记录,没有补回行。
-  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean }
+  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean; computer?: string }
   | { kind: "session"; cliSessionId: string }
   // backend 旁注；时间与落盘 sentinel 共用，实时/刷新布局才不会漂。
   // level="notice" = 这条是**结算说明**(这一轮为什么落成这个状态),不是出了什么岔子。

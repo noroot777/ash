@@ -9,6 +9,7 @@ import { InspectorHeadActions } from "../inspector/index.ts";
 import { InspButton, InspNone } from "../inspector/parts.tsx";
 import { runtimeApi } from "./runtimeApi.ts";
 import { runtimeErrorText, type BrowserActionTicket, type TaskRuntime } from "./useTaskRuntime.ts";
+import { useBrowserViewport } from "./useBrowserViewport.ts";
 import "./task-runtime.css";
 
 export function BrowserInspector({ runtime }: { runtime: TaskRuntime }) {
@@ -29,7 +30,7 @@ export function BrowserInspector({ runtime }: { runtime: TaskRuntime }) {
 }
 
 /** 画面轮询自己的失败（加载不出画面）只在这一格显示，下一帧取到就消失。 */
-function useBrowserFrame(taskId: string, state: TaskBrowserState) {
+export function useBrowserFrame(taskId: string, state: TaskBrowserState) {
   const [frame, setFrame] = useState("");
   const [error, setError] = useState("");
   const objectUrl = useRef("");
@@ -89,7 +90,7 @@ export function TaskBrowserPane({ taskId, state, error, begin, reopen, reopening
   const { frame, error: frameError } = useBrowserFrame(taskId, state);
   const ready = state.status === "ready";
   const controlled = ready && state.control === "user";
-  const mobile = state.width <= 480;
+  const mobile = (state.display?.width ?? state.width) <= 480;
   useEffect(() => { setPath(state.url); }, [state.url]);
   // 动作排成一队按顺序发：连点、连敲不会互相超车。
   // 排队时绑定的是这一次渲染的 begin / taskId / state.id；这一格卸掉（换任务、换会话、切走）后，
@@ -110,6 +111,7 @@ export function TaskBrowserPane({ taskId, state, error, begin, reopen, reopening
     return next;
   };
   const who = ready ? controlled ? "你在操作" : "智能体在操作" : state.status === "starting" ? "连接中" : "最后画面";
+  const { viewport, mode, changeMode } = useBrowserViewport(state, act);
   return (
     <section className={`task-browser-pane${controlled ? " is-controlled" : ""}`} aria-label="共享浏览器">
       <InspectorHeadActions>
@@ -130,16 +132,17 @@ export function TaskBrowserPane({ taskId, state, error, begin, reopen, reopening
         </div>
       </form>
       {(error || frameError || state.error) && <p className="runtime-error" role="alert">{error || frameError || state.error}</p>}
-      <div className={`task-browser-viewport${mobile ? " is-mobile" : ""}`} tabIndex={controlled ? 0 : -1} role="group" aria-label="共享页面画面"
+      <div ref={viewport} className={`task-browser-viewport${mobile && mode === "scaled" ? " is-mobile" : ""}${mode === "responsive" ? " is-responsive" : ""}`} tabIndex={controlled ? 0 : -1} role="group" aria-label="共享页面画面"
         onKeyDown={(event) => {
           if (!controlled || ["Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
           event.preventDefault();
           void act(event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey ? { action: "type", text: event.key }
             : { action: "press", key: `${event.ctrlKey || event.metaKey ? "ControlOrMeta+" : ""}${event.shiftKey ? "Shift+" : ""}${event.key}` });
         }}>
-        {frame ? <img src={frame} alt={state.title || "任务浏览器页面"} draggable={false} style={{ aspectRatio: `${state.width} / ${state.height}` }}
+        {frame ? <img src={frame} alt={state.title || "任务浏览器页面"} draggable={false}
           onClick={(event) => {
             if (!controlled || busy) return;
+            if (event.currentTarget.naturalWidth !== state.width || event.currentTarget.naturalHeight !== state.height) return;
             event.currentTarget.parentElement?.focus();
             const rect = event.currentTarget.getBoundingClientRect();
             void act({ action: "pointer", x: (event.clientX - rect.left) / rect.width * state.width, y: (event.clientY - rect.top) / rect.height * state.height });
@@ -156,6 +159,10 @@ export function TaskBrowserPane({ taskId, state, error, begin, reopen, reopening
       </li>)}</ol>}
       <footer className="task-browser-footer">
         <span>{state.width} × {state.height}</span>
+        <div className="task-browser-display" role="group" aria-label="页面显示方式">
+          <button type="button" aria-pressed={mode === "responsive"} disabled={!ready || busy} onClick={() => void changeMode("responsive")}>自适应</button>
+          <button type="button" aria-pressed={mode === "scaled"} disabled={!ready || busy} onClick={() => void changeMode("scaled")}>完整画面</button>
+        </div>
         <button type="button" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)}>操作记录</button>
         <span className="task-browser-gap" />
         {ready ? <button type="button" disabled={busy} onClick={() => void act({ action: "close" })}>断开</button>
