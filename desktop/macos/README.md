@@ -189,9 +189,9 @@ NAVI_URL=http://127.0.0.1:14977 NAVI_DATA_DIR=/tmp/navi-try HOME=/tmp/navi-home 
 
 内容铺到窗口顶，红绿灯浮在页面左上角，不单占一行标题栏（首次配置时窗口开多大见「第一次打开」）。页面要给它让位，所以是页面先表态：`web/index.html` 里有 `<meta name="navi-window-chrome" content="overlay">`（改名前的页面写的是 `ash-window-chrome`，也认）才铺上去，没有这一行的文档（更早版本的 Navi、同源的其它页面）仍是普通标题栏。壳把红绿灯的实际高宽量出来交给页面（`--window-titlebar-height` / `--window-controls-width`，全屏时为 0），页面这一半在 `web/src/styles/window-shell.css`：主工作区和设置页把那一条用起来，其它整页布局默认让开。顶上那一条的空白处、以及页面用 `--window-drag: drag` 划进来的顶栏都能拖窗口，双击跟随系统设置。
 
-`NaviWebView` 通过 `acceptsFirstMouse` 让后台窗口同时激活和点击，其他输入仍交给 WebKit。前台首击失灵的根因尚未确认：人为逆序的输入法回调能让旧 WebKit 丢掉点击，但前台真实微信输入法实测未复现，不能据此认定用户的故障由输入法造成；后台探针通过也不代表覆盖了前台真实输入法。
+`NaviWebView` 通过 `acceptsFirstMouse` 让后台窗口同时激活和点击。2026-11-21 用户在独立诊断窗口复现了从任务切到新建后，智能体、工作目录和任务列表首击失灵：原生日志是按下→松开，前台、当前窗口、微信输入法和输入框焦点均在，页面却收到松开→按下且没有 click；第二下正常。修复只对各鼠标按键的按下、拖动、松开先用 AppKit 公开的同步 `handleEvent` 取得输入法处理结果，未消费的事件按原生到达顺序交给 WebKit，转发期间避免二次异步处理。键盘、鼠标移动、移入和移出仍走 WebKit 原链路。同步调用仍依赖输入法及时返回；后台确定性探针只验证分发契约，不代表前台真实输入法覆盖。
 
-需要抓取实际故障时，`node desktop/macos/scripts/trace-clicks.mjs` 会根据已安装应用的源码提交，编译并打开独立的「Navi 点击诊断」窗口，连接现有本机服务，不安装应用、不启动或替换服务。诊断构建关闭自动更新、旧身份迁移、登录项整理、MCP 配置检查和遗留下载清理；服务离线时只显示失败，不自行恢复。它保留已安装版本的 WebKit 输入处理，只附加事件观察，记录原生鼠标按下/松开、页面 pointer/mouse/click、目标节点身份及是否脱离 DOM、点击后的路由；不记录输入内容、任务标题或页面正文。日志在命令输出的临时目录 `events.jsonl` 中，最多记录 10000 行，退出该诊断应用即可停止。`--prepare-only` 只构建不打开。诊断窗口使用独立的网页数据仓，不复制当前窗口的草稿或登录态。这是取证工具，不是首击故障已修复的证明。
+需要抓取实际故障时，`node desktop/macos/scripts/trace-clicks.mjs` 会根据已安装应用的源码提交，编译并打开独立的「Navi 点击诊断」窗口，连接现有本机服务，不安装应用、不启动或替换服务。诊断构建关闭自动更新、旧身份迁移、登录项整理、MCP 配置检查和遗留下载清理；服务离线时只显示失败，不自行恢复。默认保留已安装版本的输入处理；`--candidate-input` 仅替换为当前工作区的 `NaviWebView`，日志记下源码哈希，其余窗口和页面保持已安装版本。只附加事件观察，记录原生鼠标按下/松开、页面 pointer/mouse/click、目标节点身份及是否脱离 DOM、点击后的路由；不记录输入内容、任务标题或页面正文。日志在命令输出的临时目录 `events.jsonl` 中，最多记录 10000 行，退出该诊断应用即可停止。`--prepare-only` 只构建不打开。诊断窗口使用独立的网页数据仓，不复制当前窗口的草稿或登录态。这是取证工具，不是首击故障已修复的证明。
 
 导出下载先写目标目录内的独立临时文件，完成后再原子替换目标文件。下载失败或在完成前退出不会删除已有文件。每笔下载在 app 那块地（`~/Library/Application Support/dev.navi.mac`，升级上来的是 `dev.ash.mac`）的 `downloads` 下留一张带锁的登记；app 被强杀或断电留下的隐藏暂存目录（目标文件夹里的 `.ash-download-…`）下次启动时照登记回收，仍在写的下载持着锁、不会被碰。
 
@@ -204,7 +204,7 @@ NAVI_URL=http://127.0.0.1:14977 NAVI_DATA_DIR=/tmp/navi-try HOME=/tmp/navi-home 
 | `scripts/install-app.sh` | 换进安装目录（按目录加锁）；旧包还有进程在用就不换 |
 | `scripts/bundle-users.sh` | 还有哪些进程在用某个 .app（按真实文件身份认） |
 | `Sources/NaviConfig.swift` | 连哪台、自带运行时在哪、数据和日志放哪 |
-| `Sources/NaviWebView.swift` | 后台首击；其他输入保持 WebKit 原链路 |
+| `Sources/NaviWebView.swift` | 后台首击；鼠标按键手势按序交给输入法与 WebKit |
 | `Sources/LegacyIdentity.swift` | 改名前的 Ash.app 怎么交班：设置、网页数据、登录项接过来，旧包让位 |
 | `Sources/NaviHealth.swift` | 「端口上是谁」的唯一判据（数据根、自带代码、本机模式、窗口专用端口） |
 | `Sources/ServerLauncher.swift` | 起自带的服务；端口被占时说清是谁 |

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ assert.equal(process.platform, "darwin", "macOS only");
 const mac = fileURLToPath(new URL("..", import.meta.url));
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const installed = process.env.NAVI_CLICK_TRACE_APP || "/Applications/Navi.app";
+const candidateInput = process.argv.includes("--candidate-input");
 const service = new URL(process.env.NAVI_CLICK_TRACE_URL || "http://127.0.0.1:4317");
 assert.ok(["127.0.0.1", "localhost", "[::1]"].includes(service.hostname), "diagnostics only connects to the existing local service");
 const response = await fetch(new URL("/api/health", service), { signal: AbortSignal.timeout(5000) });
@@ -65,6 +67,13 @@ for (const path of sourcePaths) {
   writeFileSync(join(sourceDirectory, path.split("/").at(-1)), source);
 }
 assert.equal(webViewDefinitions, 1, "expected one installed NaviWebView implementation");
+let inputVariant = `installed:${commit}`;
+if (candidateInput) {
+  const input = readFileSync(join(mac, "Sources/NaviWebView.swift"), "utf8");
+  inputVariant = `candidate:${createHash("sha256").update(input).digest("hex").slice(0, 16)}`;
+  writeFileSync(join(sourceDirectory, "CandidateNaviWebView.swift"),
+    replaceOnce(input, "class NaviWebView: WKWebView", "class CandidateNaviWebView: WKWebView"));
+}
 for (const key of Object.keys(plist)) if (key.startsWith("SU")) delete plist[key];
 Object.assign(plist, {
   CFBundleIdentifier: "dev.navi.click-trace", CFBundleName: "Navi 点击诊断",
@@ -77,6 +86,7 @@ execFileSync("plutil", ["-convert", "xml1", info]);
 const environment = {
   NAVI_URL: service.origin, NAVI_DATA_DIR: instance.dataDir, NAVI_MAC_RUNTIME: instance.codeDir,
   NAVI_MAC_WINDOW_PORT: String(instance.windowPort), NAVI_MAC_CLICK_TRACE: join(temporary, "events.jsonl"),
+  NAVI_MAC_CLICK_TRACE_INPUT: inputVariant,
 };
 const bootstrap = Object.entries(environment).map(([key, value]) => `setenv(${JSON.stringify(key)}, ${JSON.stringify(value)}, 1)`).join("\n");
 const main = join(temporary, "main.swift");
@@ -84,11 +94,12 @@ const entry = replaceOnce(readFileSync(join(sourceDirectory, "main.swift"), "utf
 writeFileSync(main, `import Darwin\n${bootstrap}\n${entry}`);
 const sources = readdirSync(sourceDirectory).filter(name => name.endsWith(".swift") && name !== "main.swift");
 execFileSync("swiftc", ["-O", "-swift-version", "5", "-target", "arm64-apple-macos14.0",
+  ...(candidateInput ? ["-D", "NAVI_CLICK_TRACE_CANDIDATE"] : []),
   "-framework", "AppKit", "-framework", "WebKit", "-F", join(installed, "Contents/Frameworks"), "-framework", "Sparkle",
   "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
   ...sources.map(name => join(sourceDirectory, name)), join(mac, "Diagnostics/ClickTrace.swift"), main,
   "-o", join(contents, "MacOS/Navi")], { stdio: "inherit" });
 execFileSync("codesign", ["--force", "--sign", "-", app], { stdio: "inherit" });
 console.log(`诊断源码：已安装版本 ${commit}\n诊断窗口：${app}\n事件日志：${environment.NAVI_MAC_CLICK_TRACE}`);
-console.log("只记录事件元数据，不记录输入内容；未改变 WebKit 输入处理，也未替换现用应用或服务。");
+console.log(`输入处理：${inputVariant}\n只记录事件元数据，不记录输入内容；未替换现用应用或服务。`);
 if (!process.argv.includes("--prepare-only")) execFileSync("open", ["-n", app]);

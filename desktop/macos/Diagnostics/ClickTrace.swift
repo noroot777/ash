@@ -1,7 +1,13 @@
 import AppKit
 import WebKit
 
-final class NaviWebView: OriginalNaviWebView {
+#if NAVI_CLICK_TRACE_CANDIDATE
+typealias TraceInputWebView = CandidateNaviWebView
+#else
+typealias TraceInputWebView = OriginalNaviWebView
+#endif
+
+final class NaviWebView: TraceInputWebView {
   private var trace: ClickTrace?
 
   override init(frame: NSRect, configuration: WKWebViewConfiguration) {
@@ -46,7 +52,8 @@ private final class ClickTrace: NSObject, WKScriptMessageHandler {
         self?.record(["source": "trace", "type": "page-ready", "installed": error == nil])
       }
     }
-    record(["source": "trace", "type": "started", "pid": ProcessInfo.processInfo.processIdentifier])
+    record(["source": "trace", "type": "started", "pid": ProcessInfo.processInfo.processIdentifier,
+      "inputVariant": ProcessInfo.processInfo.environment["NAVI_MAC_CLICK_TRACE_INPUT"] ?? "installed"])
   }
 
   deinit {
