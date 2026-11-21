@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>状态圆点 · 真实颜色与动效对照</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      color-scheme: light;
+      --page: lch(97.94% 0.5 282); --panel: #fff; --raised: lch(96.914% 0 282);
+      --ink: lch(9.794% 0 282); --muted: lch(39.176% 1.25 282); --line: lch(90.55% 0 282);
+      --accent: #5e6ad2; --amber: #b57b00; --red: #d93d4c; --green: #168466;
+      --faint: lch(64.64% 1.25 282); --micro: #858aa8;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      color: var(--ink); background: var(--page);
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: lch(9.5% 2 282); --panel: lch(12.5% 2 282); --raised: lch(15.5% 2 282);
+      --ink: lch(92% 1 282); --muted: lch(67% 3 282); --line: lch(20.5% 2 282);
+      --accent: #7480e0; --amber: #dea43c; --red: #ef6b7b; --green: #3fba8c;
+      --faint: lch(48% 3 282); --micro: #a0a6c5;
+    }
+    body { margin: 0; padding: 34px 24px; }
+    main { max-width: 1120px; margin: auto; }
+    h1 { font-size: 26px; letter-spacing: -.6px; margin: 0 0 10px; }
+    h2 { font-size: 14px; margin: 0; }
+    p { font-size: 13px; line-height: 1.8; color: var(--muted); }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 12px; }
+    button, a { color: inherit; font: inherit; }
+    button { cursor: pointer; border: 1px solid var(--line); background: var(--panel); padding: 8px 12px; border-radius: 7px; font-size: 12px; }
+    button:hover { background: var(--raised); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .hint { min-height: 23px; margin: 0 0 20px; font-size: 12px; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 20px; align-items: start; }
+    .panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+    .panel-heading { padding: 17px 18px; border-bottom: 1px solid var(--line); }
+    .panel-heading p { font-size: 12px; margin: 6px 0 0; }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+    th { color: var(--muted); font-size: 11px; font-weight: 400; background: var(--raised); }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); }
+    th:first-child, td:first-child { padding-left: 18px; }
+    tbody tr:last-child td { border-bottom: 0; }
+    td:first-child { min-width: 140px; }
+    td:not(:first-child) { white-space: nowrap; }
+    td.motion { font-size: 11px; color: var(--muted); }
+    .sample { display: grid; place-items: center; width: 32px; height: 26px; }
+    .zoom { transform: scale(4); display: grid; place-items: center; }
+    .dot { display: block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .small .dot { width: 5px; height: 5px; }
+    .run { background: var(--accent); animation: pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
+    .hold { background: var(--accent); }
+    .wait { background: var(--amber); }
+    .bad { background: var(--red); }
+    .new { background: var(--green); }
+    .queue { box-shadow: inset 0 0 0 1.5px var(--faint); }
+    .stalled { background: color-mix(in oklab, var(--red) 16%, transparent); box-shadow: inset 0 0 0 1.5px var(--red); }
+    .open { background: color-mix(in oklab, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1.5px var(--accent); }
+    .small .queue { box-shadow: inset 0 0 0 1px var(--faint); }
+    .small .stalled { box-shadow: inset 0 0 0 1px var(--red); }
+    .small .open { box-shadow: inset 0 0 0 1px var(--accent); }
+    .dot.micro, .small .dot.micro { width: 4px; height: 4px; background: var(--micro); }
+    .candidate { background: var(--raised); }
+    .color-code { font: 10px ui-monospace, monospace; color: var(--muted); }
+    @keyframes pulse { 0%, 100% { opacity: .68; transform: scale(.84); } 50% { opacity: 1; transform: scale(1.18); } }
+    :root[data-motion="reduce"] .run { animation: none; }
+    @media (prefers-reduced-motion: reduce) { :root:not([data-motion="full"]) .run { animation: none; } }
+    .tasks { padding: 9px; background: var(--raised); }
+    .task { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 6px; font-size: 12px; }
+    .leading { display: grid; place-items: center; width: 22px; flex: 0 0 22px; }
+    .task small { margin-left: auto; color: var(--muted); font-size: 10px; }
+    .aside-note { margin: 0; padding: 14px 18px; border-top: 1px solid var(--line); font-size: 12px; }
+    .notes { margin-top: 18px; font-size: 12px; }
+    .notes a { text-underline-offset: 3px; }
+    @media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+    @media (max-width: 540px) { body { padding: 22px 12px; } h1 { font-size: 23px; } th, td { padding: 12px 7px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>这次，直接看颜色和动效。</h1>
+    <p>现有侧栏圆点按当前源码的颜色、尺寸和呼吸节奏还原；最后一行是你选的「微实心」。右侧放在同一张任务列表里比较。</p>
+    <div class="toolbar">
+      <button id="theme" type="button" aria-pressed="false">切换深色</button>
+      <button id="motion" type="button" aria-pressed="false">关闭呼吸动效</button>
+      <button id="size" type="button" aria-pressed="false">右侧切换 5px 小号</button>
+    </div>
+    <p class="hint" id="hint" role="status"></p>
+    <div class="layout">
+      <section class="panel" aria-labelledby="palette-heading">
+        <div class="panel-heading">
+          <h2 id="palette-heading">现有全部侧栏状态 ＋ 微实心候选</h2>
+          <p>7px / 5px 是现有尺寸；微实心始终 4px。放大列也保留真实动效。</p>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th scope="col">状态</th><th scope="col">7px</th><th scope="col">5px</th><th scope="col">4×</th><th scope="col">颜色</th><th scope="col">动效</th></tr></thead>
+            <tbody id="palette"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="panel" aria-labelledby="list-heading">
+        <div class="panel-heading"><h2 id="list-heading">放到一起，会不会认错？</h2><p>最接近：主色实心「等后台」与蓝灰「微实心」。</p></div>
+        <div class="tasks" id="tasks"></div>
+        <p class="aside-note">微实心是静态蓝灰点，不跟运行状态一起呼吸。关闭动效后，也可以比较两者是否仍能区分。</p>
+      </section>
+    </div>
+    <p class="notes">颜色与动效依据：task-status-dot.css / global.css；这是独立演示，不修改正式界面和真实任务。<a href="index.html">返回五种圆点方案</a></p>
+  </main>
+  <script>
+    const statuses = [
+      { name: "运行中 / 审查中", mark: "run", color: "accent", tone: "靛蓝", motion: "呼吸" },
+      { name: "等后台 / 跑验收检查", mark: "hold", color: "accent", tone: "靛蓝", motion: "静止" },
+      { name: "等答复 / 裁定 / 暂停", mark: "wait", color: "amber", tone: "琥珀", motion: "静止" },
+      { name: "失败 / 验证没过", mark: "bad", color: "red", tone: "红", motion: "静止" },
+      { name: "已验收，有未读动态", mark: "new", color: "green", tone: "绿", motion: "静止" },
+      { name: "排队 / 等前置 / 等开工", mark: "queue", color: "faint", tone: "灰", motion: "静止" },
+      { name: "卡在模型上游", mark: "stalled", color: "red", tone: "红环", motion: "静止" },
+      { name: "待验收 · 现有", mark: "open", color: "accent", tone: "靛蓝环", motion: "静止" },
+      { name: "尚未开始 / 验收后已读", mark: null, tone: "不画点", motion: "—" },
+      { name: "待验收 · 微实心候选", mark: "micro", color: "micro", tone: "蓝灰", motion: "静止" }
+    ];
+    const taskRows = [
+      ["run", "优化任务加载", "运行中"], ["hold", "等待验收检查", "等后台"],
+      ["micro", "排查登录回调", "待验收 · 新"], ["micro", "调整详情留白", "待验收 · 新"],
+      ["wait", "确认发布配置", "等答复"], ["bad", "修复构建失败", "失败"],
+      ["new", "统一按钮尺寸", "验收后未读"], ["queue", "补齐接口文档", "排队中"],
+      ["stalled", "等待模型输出", "卡在上游"], ["open", "整理结果提示", "待验收 · 旧"],
+      ["micro", "修复附件预览", "待验收 · 新"], [null, "整理设置入口", "验收后已读"]
+    ];
+    const reducedPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let motionOff = reducedPreference.matches;
+    let motionChosen = false;
+    function make(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    }
+    function specimen(mark, mode) {
+      const stage = make("span", `sample ${mode === "small" ? "small" : ""}`);
+      stage.setAttribute("aria-hidden", "true");
+      if (mark) {
+        const dot = make("span", `dot ${mark}`);
+        if (mode === "zoom") { const zoom = make("span", "zoom"); zoom.append(dot); stage.append(zoom); }
+        else stage.append(dot);
+      }
+      return stage;
+    }
+    function renderPalette() {
+      const colors = getComputedStyle(document.documentElement);
+      document.getElementById("palette").replaceChildren(...statuses.map(status => {
+        const row = make("tr", status.mark === "micro" ? "candidate" : "");
+        row.append(make("td", "", status.name));
+        for (const size of ["normal", "small", "zoom"]) { const cell = make("td"); cell.append(specimen(status.mark, size)); row.append(cell); }
+        const color = make("td", "", status.tone);
+        if (status.color) color.append(make("div", "color-code", colors.getPropertyValue(`--${status.color}`).trim()));
+        row.append(color, make("td", "motion", status.mark === "run" && motionOff ? "已关闭呼吸" : status.motion));
+        return row;
+      }));
+    }
+    function updateMotion() {
+      document.documentElement.dataset.motion = motionOff ? "reduce" : "full";
+      document.getElementById("motion").textContent = motionOff ? "开启呼吸动效" : "关闭呼吸动效";
+      document.getElementById("motion").setAttribute("aria-pressed", String(motionOff));
+      document.getElementById("hint").textContent = motionOff
+        ? "呼吸已关闭：运行中与等后台都静止。可以点击「开启呼吸动效」看实际节奏。"
+        : "只有「运行中 / 审查中」在呼吸，周期 1.35 秒；其他点保持静止。";
+      renderPalette();
+    }
+    document.getElementById("tasks").replaceChildren(...taskRows.map(([mark, title, label]) => {
+      const row = make("div", "task");
+      const leading = make("span", "leading");
+      if (mark) leading.append(make("span", `dot ${mark}`));
+      leading.setAttribute("aria-hidden", "true");
+      row.append(leading, make("span", "", title), make("small", "", label));
+      return row;
+    }));
+    document.getElementById("theme").onclick = () => {
+      const dark = document.documentElement.dataset.theme !== "dark";
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+      document.getElementById("theme").textContent = dark ? "切换浅色" : "切换深色";
+      document.getElementById("theme").setAttribute("aria-pressed", String(dark));
+      renderPalette();
+    };
+    document.getElementById("motion").onclick = () => { motionChosen = true; motionOff = !motionOff; updateMotion(); };
+    document.getElementById("size").onclick = () => {
+      const small = document.getElementById("tasks").classList.toggle("small");
+      document.getElementById("size").textContent = small ? "右侧切换 7px 标准" : "右侧切换 5px 小号";
+      document.getElementById("size").setAttribute("aria-pressed", String(small));
+    };
+    reducedPreference.addEventListener("change", event => { if (!motionChosen) { motionOff = event.matches; updateMotion(); } });
+    updateMotion();
+  </script>
+</body>
+</html>
