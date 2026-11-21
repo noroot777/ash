@@ -189,6 +189,8 @@ NAVI_URL=http://127.0.0.1:14977 NAVI_DATA_DIR=/tmp/navi-try HOME=/tmp/navi-home 
 
 内容铺到窗口顶，红绿灯浮在页面左上角，不单占一行标题栏（首次配置时窗口开多大见「第一次打开」）。页面要给它让位，所以是页面先表态：`web/index.html` 里有 `<meta name="navi-window-chrome" content="overlay">`（改名前的页面写的是 `ash-window-chrome`，也认）才铺上去，没有这一行的文档（更早版本的 Navi、同源的其它页面）仍是普通标题栏。壳把红绿灯的实际高宽量出来交给页面（`--window-titlebar-height` / `--window-controls-width`，全屏时为 0），页面这一半在 `web/src/styles/window-shell.css`：主工作区和设置页把那一条用起来，其它整页布局默认让开。顶上那一条的空白处、以及页面用 `--window-drag: drag` 划进来的顶栏都能拖窗口，双击跟随系统设置。
 
+`NaviWebView` 处理两条独立的首击链路：后台窗口通过 `acceptsFirstMouse` 同时激活和点击；前台编辑器有焦点时，先用公开的 `NSTextInputContext.handleEvent` 同步询问输入法，再把未消费的原生鼠标事件交给 WebKit。WebKit 的异步输入法回调可能先交回松开、后交回按下，让页面只收到 `mouseup`、没有 `click`；只改后台激活并不能解决它。转交 WebKit 的同步调用期间暂时不重复提供输入上下文，调用结束立即恢复，键盘、中文组词和候选操作仍使用原来的输入上下文。`Tests/PointerOrderingProbe.swift` 用逆序完成的输入法回调覆盖这个路径，包括输入框、任务按钮、普通按钮，以及输入法消费事件、双击和中文文字插入。
+
 导出下载先写目标目录内的独立临时文件，完成后再原子替换目标文件。下载失败或在完成前退出不会删除已有文件。每笔下载在 app 那块地（`~/Library/Application Support/dev.navi.mac`，升级上来的是 `dev.ash.mac`）的 `downloads` 下留一张带锁的登记；app 被强杀或断电留下的隐藏暂存目录（目标文件夹里的 `.ash-download-…`）下次启动时照登记回收，仍在写的下载持着锁、不会被碰。
 
 ## 文件
@@ -200,6 +202,7 @@ NAVI_URL=http://127.0.0.1:14977 NAVI_DATA_DIR=/tmp/navi-try HOME=/tmp/navi-home 
 | `scripts/install-app.sh` | 换进安装目录（按目录加锁）；旧包还有进程在用就不换 |
 | `scripts/bundle-users.sh` | 还有哪些进程在用某个 .app（按真实文件身份认） |
 | `Sources/NaviConfig.swift` | 连哪台、自带运行时在哪、数据和日志放哪 |
+| `Sources/NaviWebView.swift` | 后台首击和输入法鼠标事件顺序；键盘输入保持原链路 |
 | `Sources/LegacyIdentity.swift` | 改名前的 Ash.app 怎么交班：设置、网页数据、登录项接过来，旧包让位 |
 | `Sources/NaviHealth.swift` | 「端口上是谁」的唯一判据（数据根、自带代码、本机模式、窗口专用端口） |
 | `Sources/ServerLauncher.swift` | 起自带的服务；端口被占时说清是谁 |

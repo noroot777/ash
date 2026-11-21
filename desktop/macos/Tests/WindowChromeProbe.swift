@@ -195,6 +195,7 @@ func runWindowChromeProbe() -> Never {
   }
 
   probeFirstClickInBackgroundWindow(app, spin: spin)
+  runPointerOrderingProbe(app, spin: spin)
 
   print("PASS: window chrome")
   exit(0)

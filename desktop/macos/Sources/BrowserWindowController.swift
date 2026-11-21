@@ -382,11 +382,3 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
   }
 }
-
-/// 窗口不是当前窗口时（刚从别的应用切过来、另一扇窗或弹窗还在前面），AppKit 先问落点的视图收不收这一下：
-/// WKWebView 只在落点能拖起选区或拖拽时才收，点在按钮上一律不收，这一下就只拿去激活窗口，页面什么都收不到，
-/// 要再点一次。而页面在后台时照样显示悬停效果，看着能点、点了没反应。这里一律收下，和浏览器、Electron 应用一样：
-/// 第一下既激活窗口也交给页面。顶上那一条的空白处也因此能直接拖动后台窗口（见 WindowChrome）。
-final class NaviWebView: WKWebView {
-  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-}
