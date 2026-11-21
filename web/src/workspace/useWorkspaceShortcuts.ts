@@ -95,6 +95,11 @@ export function useWorkspaceShortcuts({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof Element && event.target.closest(".xterm") && !event.metaKey) {
+        inspectorSequence.current.reset();
+        goSequence.current.reset();
+        return;
+      }
       const commandPalette = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
       if (commandPalette) {
         inspectorSequence.current.reset();

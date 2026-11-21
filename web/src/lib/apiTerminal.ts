@@ -15,8 +15,8 @@ export const terminalApi = {
     size: { cols: number; rows: number },
   ): Promise<TerminalSessionInfo> =>
     request(`/projects/${id(projectId)}/terminal/sessions`, json("POST", size)),
-  terminalEventsUrl: (projectId: string, sessionId: string): string =>
-    apiPath(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/events`),
+  terminalEventsUrl: (projectId: string, sessionId: string, after = 0): string =>
+    apiPath(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/events?after=${after}`),
   writeTerminalSession: (projectId: string, sessionId: string, data: string): Promise<void> =>
     request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/input`, json("POST", { data })),
   resizeTerminalSession: (

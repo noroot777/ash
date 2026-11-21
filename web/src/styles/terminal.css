@@ -16,6 +16,7 @@
   color: #c9cbd6;
   box-shadow: 0 -8px 30px rgb(0 0 0 / 22%);
 }
+.project-terminal[hidden] { display: none; }
 
 .project-terminal__resize {
   position: absolute;
@@ -62,10 +63,22 @@
 .project-terminal__drawer-hide:hover { background: #2b2c34; color: #ecedf2; }
 .project-terminal__drawer-hide:focus-visible { outline: 2px solid color-mix(in oklab, var(--accent) 78%, white); outline-offset: -2px; }
 
-.project-terminal__viewport { min-height: 0; flex: 1; overflow: hidden; padding: 8px 12px 10px; }
+.project-terminal__viewport { min-height: 0; flex: 1; overflow: hidden; padding: 12px 16px; }
 .project-terminal__viewport[hidden] { display: none; }
 .project-terminal__viewport .xterm { height: 100%; }
 .project-terminal__viewport .xterm-viewport { scrollbar-color: rgb(201 203 214 / 22%) transparent; }
+
+.terminal-appearance { position: relative; }
+.terminal-appearance__toggle { display: grid; place-items: center; width: 28px; height: 26px; border: 0; border-radius: 4px; background: transparent; color: #aeb7ca; cursor: pointer; }
+.terminal-appearance__toggle:hover, .terminal-appearance__toggle[aria-expanded="true"] { background: #353b49; color: #f2f5fa; }
+.terminal-appearance__panel { position: absolute; z-index: 6; right: 0; bottom: calc(100% + 8px); width: 228px; padding: 12px; border: 1px solid #424959; border-radius: 10px; background: #232731; color: #d8dee9; box-shadow: 0 8px 30px #0005; }
+.terminal-appearance__themes { display: flex; gap: 8px; }
+.terminal-appearance__panel button { flex: 1; border: 1px solid transparent; border-radius: 5px; padding: 4px; background: transparent; color: inherit; font-size: 12px; cursor: pointer; }
+.terminal-appearance__panel button[aria-pressed="true"] { border-color: #8caaee; background: #8caaee1a; }
+.terminal-appearance__panel button:hover { background: #ffffff12; }
+.terminal-appearance__themes span { display: grid; place-items: center; height: 40px; margin-bottom: 5px; border: 1px solid #ffffff18; border-radius: 3px; font: 16px ui-monospace, monospace; }
+.terminal-appearance__sizes { display: flex; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid #ffffff12; }
+.terminal-appearance button:focus-visible { outline: 2px solid #8caaee; outline-offset: 2px; }
 
 @media (max-width: 760px) {
   .project-terminal__bar > code { display: none; }

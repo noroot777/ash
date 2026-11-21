@@ -7,6 +7,9 @@ import { api, type TerminalEvent } from "../lib/api.ts";
 import { TerminalTabStrip } from "./TerminalTabStrip.tsx";
 import type { ProjectTerminalTab } from "./terminalTabs.ts";
 import type { TerminalDock } from "./useTerminalDock.ts";
+import { TerminalAppearanceMenu } from "./TerminalAppearanceMenu.tsx";
+import { readTerminalAppearance, terminalThemes, TERMINAL_APPEARANCE_KEY, type TerminalAppearance } from "./terminalAppearance.ts";
+import { terminalInputChunks } from "./terminalInput.ts";
 
 const TERMINAL_HEIGHT_KEY = "navi:terminal-height";
 const DEFAULT_HEIGHT = 280;
@@ -40,23 +43,26 @@ function TerminalPane({
   tab,
   notify,
   onMeta,
+  appearance,
 }: {
   active: boolean;
   project: ProjectView;
   tab: ProjectTerminalTab;
   notify: (message: string) => void;
   onMeta: (id: string, patch: Partial<Pick<ProjectTerminalTab, "cwd" | "status" | "sessionId">>) => void;
+  appearance: TerminalAppearance;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const lastSeqRef = useRef(0);
   // 已经有会话的 tab(attach 来的,或自己建完回填了 sessionId)一挂上就能收发;只有全新的
   // shell tab 要等 create 完才有 id。流 effect 等这个。
   const sessionIdRef = useRef<string | null>(tab.attachSessionId ?? tab.sessionId ?? null);
   const [establishedId, setEstablishedId] = useState<string | null>(tab.attachSessionId ?? tab.sessionId ?? null);
   const tabRef = useRef(tab);
   tabRef.current = tab;
-  // 每条 SSE 连接生命周期内,每种说明只写一次(重连 reset 后重置,replay 末尾补写)。
+  // 同一份 xterm 屏幕内,每种说明只写一次;重建屏幕后才重新补写。
   const announcedRef = useRef({ detached: false, ended: false });
   const prevStatusRef = useRef(tab.status);
 
@@ -104,6 +110,14 @@ function TerminalPane({
     });
   }, [active]);
 
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.theme = terminalThemes[appearance.theme].colors;
+    terminal.options.fontSize = appearance.fontSize;
+    if (active) fitRef.current?.fit();
+  }, [appearance, active]);
+
   // 基座:xterm 实例、输入/резize 通道、shell 会话的创建与关闭。日志流不在这里 ——
   // 它跟随 active(见下一个 effect),隐藏 tab 不占长连接。
   useEffect(() => {
@@ -117,37 +131,20 @@ function TerminalPane({
     let pendingSize: { cols: number; rows: number } | null = null;
     const terminal = new Terminal({
       cursorBlink: true,
-      cursorStyle: "bar",
+      cursorStyle: "block",
       fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
-      fontSize: 12.5,
-      lineHeight: 1.35,
+      fontSize: appearance.fontSize,
+      lineHeight: 1.25,
       scrollback: 5000,
-      allowTransparency: true,
-      // 底部坞是深色的(terminal.css),xterm 的调色板跟着走:浅色那套落在 #17181d 上
-      // 只剩一团糊。原配色见 Git 历史 712b4e8b:docs/demos/project-command-center/shared.css。
-      theme: {
-        background: "#17181d",
-        foreground: "#c9cbd6",
-        cursor: "#8f9aff",
-        cursorAccent: "#17181d",
-        selectionBackground: "#3a3d55",
-        black: "#2b2c34",
-        red: "#ef7a86",
-        green: "#58c99a",
-        yellow: "#e0b356",
-        blue: "#7f9cf5",
-        magenta: "#c08bf0",
-        cyan: "#5ac8d8",
-        white: "#c9cbd6",
-        brightBlack: "#71737f",
-        brightWhite: "#ecedf2",
-      },
+      theme: terminalThemes[appearance.theme].colors,
     });
     const fit = new FitAddon();
     terminalRef.current = terminal;
     fitRef.current = fit;
     terminal.loadAddon(fit);
     terminal.open(host);
+    lastSeqRef.current = 0;
+    announcedRef.current = { detached: false, ended: false };
 
     const showConnectionError = (reason: unknown) => {
       if (!alive) return;
@@ -163,7 +160,9 @@ function TerminalPane({
       const data = inputBuffer;
       inputBuffer = "";
       inputChain = inputChain
-        .then(() => api.writeTerminalSession(project.id, sessionId, data))
+        .then(async () => {
+          for (const chunk of terminalInputChunks(data)) await api.writeTerminalSession(project.id, sessionId, chunk);
+        })
         .catch(showConnectionError);
     };
     const queueInput = (data: string) => {
@@ -227,29 +226,28 @@ function TerminalPane({
       fitRef.current = null;
       if (inputTimer !== null) window.clearTimeout(inputTimer);
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
-      // 会话是持久的(VSCode 语义):unmount 只发生在关抽屉/收起 tab/切项目,这些都不杀
+      // 会话是持久的(VSCode 语义):unmount 发生在收起 tab/切项目,这些都不杀
       // shell —— 重开抽屉从会话列表原样恢复。结束会话统一走 closeTab 的 DELETE。
     };
   }, [notify, onMeta, project.id, tab.id, tab.attachSessionId]);
 
   // 日志流:只有激活 tab 保持 SSE。每个隐藏 tab 一条常驻长连接会把 Chrome 的同源
   // 连接池(HTTP/1.1 同主机 6 条)占满,停止/重启和一切状态轮询全部 pending,控制面
-  // 冻结(第 1 轮审查实锤:6 条活命令即可复现)。切走即断,切回 reset 后从 seq 0
-  // 重放服务端缓冲 —— 日志不丢,连接数恒为 1。
+  // 冻结(第 1 轮审查实锤:6 条活命令即可复现)。切走即断,切回沿当前屏幕的 seq 续接。
   useEffect(() => {
     if (!active || !establishedId) return;
     const terminal = terminalRef.current;
     if (!terminal) return;
     let alive = true;
-    let ended = false;
-    terminal.reset();
-    announcedRef.current = { detached: false, ended: false };
-    const source = new EventSource(api.terminalEventsUrl(project.id, establishedId));
+    let ended = tabRef.current.status === "ended";
+    const source = new EventSource(api.terminalEventsUrl(project.id, establishedId, lastSeqRef.current));
     // attach tab 的状态点表达会话/服务事实,由集中轮询驱动,连接事件不碰它。
     source.onopen = () => { if (alive && !ended && !tab.attachSessionId) onMeta(tab.id, { status: "ready" }); };
     source.onmessage = (message) => {
       if (!alive) return;
       const event = JSON.parse(message.data) as TerminalEvent;
+      if (event.seq <= lastSeqRef.current) return;
+      lastSeqRef.current = event.seq;
       if (event.type === "data") {
         terminal.write(event.data);
         return;
@@ -299,6 +297,11 @@ export function ProjectTerminal({
   notify: (message: string) => void;
 }) {
   const { tabs, activeId, activeTab } = dock;
+  const [appearance, setAppearance] = useState(readTerminalAppearance);
+  const changeAppearance = (next: TerminalAppearance) => {
+    setAppearance(next);
+    window.localStorage.setItem(TERMINAL_APPEARANCE_KEY, JSON.stringify(next));
+  };
   // height = 用户挑的那个高度(偏好),appliedHeight = 按当前窗口夹过的实际高度。
   // 底部坞横着占一整行,高度不跟着窗口收就会把上面的工作区整个挤没(实测:560 的终端
   // + 620 高的窗口 = 侧栏和主区只剩 34px);但**夹只发生在渲染这一侧** —— 偏好既不在
@@ -343,7 +346,7 @@ export function ProjectTerminal({
   };
 
   return (
-    <section className="project-terminal" style={{ height: appliedHeight }} aria-label={`${project.name} CLI`}>
+    <section className="project-terminal" hidden={!dock.open} style={{ height: appliedHeight, background: terminalThemes[appearance.theme].colors.background }} aria-label={`${project.name} CLI`}>
       <div
         className="project-terminal__resize"
         role="separator"
@@ -363,6 +366,7 @@ export function ProjectTerminal({
           idPrefix="panel-terminal-tab"
         />
         <code>{activeTab?.cwd ?? project.repoPath}</code>
+        <TerminalAppearanceMenu appearance={appearance} onChange={changeAppearance} />
         <button type="button" className="project-terminal__drawer-hide" aria-label="收起终端（shell 与服务继续跑）" onClick={dock.hide} />
       </header>
       {tabs.map((tab) => (
@@ -370,9 +374,10 @@ export function ProjectTerminal({
           key={tab.id}
           tab={tab}
           project={project}
-          active={tab.id === activeId}
+          active={dock.open && tab.id === activeId}
           notify={notify}
           onMeta={dock.setMeta}
+          appearance={appearance}
         />
       ))}
     </section>

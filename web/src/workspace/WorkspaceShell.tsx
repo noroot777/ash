@@ -594,7 +594,7 @@ export function WorkspaceShell() {
   // 底部坞的上半截:横贯整个窗口、和状态栏连成一条,而不是缩在主区卡片里。
   // 三个视图分支都渲染它(和 statusBar 同进同出),项目不变就不重挂 —— 切到设置 / Git
   // 时终端里的现场原样留着。
-  const terminalDock = terminal.open && currentProject
+  const terminalDock = (terminal.open || terminal.tabs.length > 0) && currentProject && canUseTerminal
     ? <ErrorBoundary key={currentProject.id} fallback={() => <LoadFailure what="终端" onClose={terminal.hide} />}><Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} dock={terminal} notify={notify} /></Suspense></ErrorBoundary>
     : null;
   const overlays = <>
