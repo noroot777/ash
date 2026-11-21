@@ -7,6 +7,7 @@
   "appcastPath": "navi/mac/appcast.xml",
   "legacyAppcastPath": "ash/mac/appcast.xml",
   "tagPrefix": "navi-mac-v",
+  "downloadTag": "navi-mac-latest",
   "keychainAccount": "dev.navi.mac",
   "legacyKeychainAccount": "dev.ash.mac",
   "publicKey": "qmEowTREgXY+e/AalqZkEISl/ii8GuSd0B3U5b34z+M="

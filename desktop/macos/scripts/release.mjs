@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // 发一版 mac app：构建独立 app → 封 dmg → EdDSA 签名 → 在装包仓库（release.json 的 releaseRepo）建
 // GitHub Release、传 dmg → 更新 appcast.xml（整份也签过）→ 经 GitHub API 提交进清单仓库（feedRepo）→
-// 把仓库根 README 的下载链接改成这个 dmg、只在本地提交。已装的 app 定时拉那份 appcast，看到新版就提示
+// 更新 Mac 固定下载页。已装的 app 定时拉那份 appcast，看到新版就提示
 // 安装；同一个 dmg 也是新用户下载安装的那个。读写 GitHub 全程只用一张凭证，开传之前先确认它对两个仓库
 // 都有写权限。改名前装的 Ash.app 看的是另一份 appcast（legacyAppcastPath），也装不了包标识不同的 Navi：
 // 那一份里只放一条「仅通知」的条目，点开是下载页（见 publishLegacyFeed）。
 //
-//   npm run release:mac                         # 正式发版（要先 --keys 做过一次）
-//   npm run release:mac -- --keys               # 生成 / 读出正式 EdDSA 密钥，公钥写进 release.json
-//   npm run release:mac -- --init-repo          # release.json 里的仓库还不存在时建它们（公开）
-//   npm run release:mac -- --local <目录> --app <Navi.app> --ed-key-file <私钥文件>
+//   npm run release:mac:local                         # 正式发版（要先 --keys 做过一次）
+//   npm run release:mac:local -- --keys               # 生成 / 读出正式 EdDSA 密钥，公钥写进 release.json
+//   npm run release:mac:local -- --init-repo          # release.json 里的仓库还不存在时建它们（公开）
+//   npm run release:mac:local -- --local <目录> --app <Navi.app> --ed-key-file <私钥文件>
 //                                               # 演练：dmg 和 appcast 写进本地目录，不碰 GitHub、不碰 README
 //
 // 其它选项：--app <Navi.app> 用现成的构建（不重新 build）；--notes <文字> 换掉自动生成的更新说明。
@@ -25,20 +25,21 @@
 //    没有哪份 appcast 引用它，而读和撤之间别的发版进程可能刚提交了 appcast），只靠重跑往前补完。
 //  · 没发完重跑时，同一版沿用上次封好的 dmg（重封出来的字节不同，签名就和已传上去的那份对不上了）
 //    —— 但只在这次给的 app 和封那个 dmg 的是同一份时（旁边记着 app 的内容摘要），不是就拒发。
-//    appcast 里已经是这个包（签名一样）时只补后面没做完的：公开 Release、README 链接（README 只在
-//    这一版仍是 appcast 里最新的时候才改，补旧版的收尾不把首页链接倒回去）。
+//    appcast 里已经是这个包（签名一样）时只补后面没做完的：公开 Release、Mac 固定下载页。
 //  · Release 的 tag 打在构建这份 app 的那个提交上：那个提交要先推到装包仓库；同名 tag 已经在、
 //    却指着别的提交，就拒发（GitHub 会沿用已有的 tag，Release 就对不上源码）。公开那一下连目标提交
 //    一起写（沿用的旧草稿可能记着别的提交），公开后再核对一遍 tag。
 import { spawnSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { readEnv } from "../../../scripts/env.mjs";
 import { compareVersions, latestVersion, parseItems, previousCommit, renderAppcast, renderInformationalItem, renderItem } from "./appcast.mjs";
-import { commitLink, LINK_COMMIT_PREFIX } from "./download-link.mjs";
+import { appInfo, packApp } from "./release-artifacts.mjs";
+import { updateDownloadChannel } from "./release-channel.mjs";
+import { LINK_COMMIT_PREFIX, readConfig as loadConfig } from "./release-state.mjs";
 import { GitHub, NO_TOKEN_HINT, resolveToken } from "./github.mjs";
 import { ensureSparkle } from "./sparkle.mjs";
 
@@ -47,8 +48,6 @@ const MAC = resolve(HERE, "..");
 const REPO = resolve(MAC, "../..");
 // NAVI_MAC_RELEASE_CONFIG 只给回归测试换一份发版配置（配合 github.mjs 的 NAVI_MAC_GITHUB_API 演练正式发版）。
 const CONFIG_PATH = readEnv(process.env, "NAVI_MAC_RELEASE_CONFIG") || join(MAC, "release.json");
-// NAVI_MAC_README 同理：换掉发完要改下载链接的那份 README（测试指向一个临时仓库）。
-const README = readEnv(process.env, "NAVI_MAC_README") || join(REPO, "README.md");
 
 const say = (line) => process.stdout.write(`${line}\n`);
 class Stop extends Error {}
@@ -73,10 +72,7 @@ function publicKeyOfKeyFile(file) {
 }
 
 function readConfig() {
-  const config = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-  if (config.repo) die(`${CONFIG_PATH} 还是只有一个 repo 的旧格式：拆成 releaseRepo（放安装包的 Release）和 feedRepo（放 appcast）。`);
-  for (const key of ["releaseRepo", "feedRepo"]) if (!config[key]) die(`${CONFIG_PATH} 里缺 ${key}`);
-  return { feedBranch: "main", appcastPath: "appcast.xml", tagPrefix: "v", ...config };
+  return loadConfig(CONFIG_PATH);
 }
 
 /**
@@ -93,12 +89,6 @@ function signingAccount(config, tool) {
 }
 
 const feedOf = (config) => `https://raw.githubusercontent.com/${config.feedRepo}/${config.feedBranch}/${config.appcastPath}`;
-
-function infoOf(app) {
-  const plist = join(app, "Contents", "Info.plist");
-  if (!existsSync(plist)) die(`${plist} 不存在`);
-  return JSON.parse(run("plutil", ["-convert", "json", "-o", "-", plist]));
-}
 
 async function main() {
   const { values } = parseArgs({
@@ -122,7 +112,7 @@ async function main() {
   const local = values.local ? resolve(values.local) : null;
   let github = null;
   if (!local) {
-    if (!config.publicKey) die("release.json 里还没有 publicKey：先跑一次 npm run release:mac -- --keys");
+    if (!config.publicKey) die("release.json 里还没有 publicKey：先跑一次 npm run release:mac:local -- --keys");
     const auth = resolveToken();
     if (!auth) die(NO_TOKEN_HINT);
     say(`▶ GitHub 凭证：${auth.source}`);
@@ -136,7 +126,7 @@ async function main() {
       die(`${config.releaseRepo} 还不存在，${config.legacyReleaseRepo} 还在：先在 GitHub 上把 ${config.legacyReleaseRepo} 改名为 ${config.releaseRepo}，再发版（别跑 --init-repo）。`);
     }
     if (values["init-repo"]) return initRepos(repos, github);
-    if (missing.length) die(`${missing.join("、")} 还不存在：先跑一次 npm run release:mac -- --init-repo`);
+    if (missing.length) die(`${missing.join("、")} 还不存在：先跑一次 npm run release:mac:local -- --init-repo`);
     // 传附件和改 appcast 用的是同一张凭证、写的是两个仓库：在对外放出任何东西之前确认两样都做得了。
     const readOnly = [];
     for (const repo of repos) if (!(await github.canWrite(repo))) readOnly.push(repo);
@@ -160,7 +150,7 @@ async function main() {
     if (build.status !== 0) die("构建失败");
     app = join(MAC, "build", "Navi.app");
   }
-  const info = infoOf(app);
+  const info = appInfo(app);
   const version = info.CFBundleVersion;
   const shortVersion = info.CFBundleShortVersionString;
   // 改名前的构建记在 AshSourceCommit 里（重发一份旧构建时用得上）。
@@ -195,7 +185,6 @@ async function main() {
   // NAVI_MAC_RELEASE_ARTIFACTS 只给回归测试换地方，免得演练的包落进 build/releases。
   const artifacts = join(readEnv(process.env, "NAVI_MAC_RELEASE_ARTIFACTS") || join(MAC, "build", "releases"), tag);
   const dmg = join(artifacts, `Navi-${shortVersion}-${version}.dmg`);
-  const source = `${dmg}.source`;
   // appcast 里已经有这一版：只有正式发版、上次签进去的那个包本地还在时才往下走（签名对上了只补收尾）。
   const already = items.find((item) => item.version === version);
   if (already && (local || !existsSync(dmg))) die(`${version} 已经发过了（appcast 里有）。`);
@@ -203,23 +192,7 @@ async function main() {
 
   // ── 4. 封 dmg、签名 ──
   // 只出 dmg：人下载的和 Sparkle 更新用的是同一个文件（scripts/make-dmg.sh 里有格式上的取舍）。
-  mkdirSync(artifacts, { recursive: true });
-  const digest = appDigest(app);
-  if (existsSync(dmg)) {
-    const packed = existsSync(source) ? readFileSync(source, "utf8").trim() : "（没有记录）";
-    if (packed !== digest) {
-      die(`${dmg} 是上次从另一份 app 封的（内容摘要 ${packed}，这次是 ${digest}）：同一个构建号换了包。\n`
-        + `要发这次这份就换个构建号重新构建；确定上次那份没传出去，也可以删掉 ${artifacts} 再重跑。`);
-    }
-    say(`▶ 沿用上次没发完的 ${dmg}`);
-  } else {
-    say(`▶ 封 ${dmg}`);
-    // 临时名也以 .dmg 结尾（hdiutil 会给别的后缀补上 .dmg）。
-    const part = join(artifacts, `.part-${basename(dmg)}`);
-    run("bash", [join(HERE, "make-dmg.sh"), app, part]);
-    writeFileSync(source, `${digest}\n`);
-    run("mv", [part, dmg]);
-  }
+  packApp(app, artifacts, basename(dmg), say);
   const signature = run(tool("sign_update"), [...keyArgs, "-p", dmg]);
   run(tool("sign_update"), [...keyArgs, "--verify", dmg, signature]);
   if (already) {
@@ -252,15 +225,16 @@ async function main() {
     const page = local ? url : `https://github.com/${config.releaseRepo}/releases/tag/${tag}`;
     await publishLegacyFeed({ github, config, local, keyArgs, tool, notes, info, page });
   }
+  const channel = local ? null : await updateDownloadChannel(github, config, {
+    url, shortVersion, version, commit,
+    page: `https://github.com/${config.releaseRepo}/releases/tag/${tag}`,
+  });
   say(`✓ 已发 ${shortVersion}（${version}）`);
   say(`  包：${url}`);
   say(`  appcast：${local ? appcastPath : feedOf(config)}`);
   if (!local) {
     say("  （raw.githubusercontent 有几分钟缓存，已装的 app 下一次定时检查或点「检查更新…」时就能看到）");
-    // 补旧版的收尾时首页已经指着更新的一版了，不倒回去。
-    say(`  ${latest && compareVersions(version, latest) < 0
-      ? `README 的下载链接留在更新的 ${latest}（这次补的是旧版 ${version}）`
-      : commitLink(README, { url, shortVersion, version })}`);
+    say(`  ${channel}`);
   }
 }
 
@@ -382,23 +356,6 @@ async function tagTarget(github, repo, commit, tag) {
       + "GitHub 会沿用已有的 tag，Release 就对不上源码。删掉那个 tag 或换个构建号再发（什么都还没传）。");
   }
   return sha;
-}
-
-/** 一份 app 的内容摘要：每个文件的相对路径、可执行位、内容（软链记指向）。认「是不是同一份 app」用。 */
-function appDigest(app) {
-  const hash = createHash("sha256");
-  const walk = (dir) => {
-    for (const name of readdirSync(dir).sort()) {
-      const path = join(dir, name);
-      const rel = relative(app, path);
-      const stat = lstatSync(path);
-      if (stat.isSymbolicLink()) hash.update(`L ${rel} -> ${readlinkSync(path)}\n`);
-      else if (stat.isDirectory()) walk(path);
-      else hash.update(`F ${rel} ${stat.mode & 0o111 ? "x" : "-"} ${createHash("sha256").update(readFileSync(path)).digest("hex")}\n`);
-    }
-  };
-  walk(app);
-  return hash.digest("hex");
 }
 
 /** 更新说明：上一版以来这个仓库里的提交标题（上一版的提交找不到时取最近 15 条）。 */
