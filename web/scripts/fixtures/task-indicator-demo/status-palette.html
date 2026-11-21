@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>全部状态圆点 · 4px / 7px 最终尺寸对照</title>
+  <title>全部状态圆点 · 4 / 5 / 6 / 7px 并排对照</title>
   <style>
     * { box-sizing: border-box; }
     :root {
@@ -23,7 +23,7 @@
       --faint: lch(48% 3 282); --micro: #a0a6c5;
     }
     body { margin: 0; padding: 34px 24px; }
-    main { max-width: 1000px; margin: auto; }
+    main { max-width: 1480px; margin: auto; }
     h1 { font-size: 26px; letter-spacing: -.6px; margin: 0 0 10px; }
     h2 { font-size: 14px; margin: 0; }
     p { font-size: 13px; line-height: 1.8; color: var(--muted); }
@@ -33,7 +33,8 @@
     button:hover { background: var(--raised); }
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
     .hint { min-height: 23px; margin: 0 0 20px; font-size: 12px; }
-    .layout { display: grid; grid-template-columns: repeat(2, minmax(0, 360px)); gap: 24px; justify-content: center; align-items: start; }
+    .comparison-scroll { overflow-x: auto; padding-bottom: 8px; }
+    .layout { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 1160px; gap: 16px; align-items: start; }
     .panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
     .palette-panel { margin-top: 22px; }
     summary { cursor: pointer; font-size: 13px; padding: 15px 18px; }
@@ -51,8 +52,6 @@
     td.motion { font-size: 11px; color: var(--muted); }
     .sample { display: grid; place-items: center; width: 32px; height: 26px; }
     .zoom { transform: scale(4); display: grid; place-items: center; }
-    .size-4 { --dot-size: 4px; --ring-width: 1px; }
-    .size-7 { --dot-size: 7px; --ring-width: 1.5px; }
     .dot { display: block; width: var(--dot-size); height: var(--dot-size); border-radius: 50%; flex-shrink: 0; }
     .run { background: var(--accent); animation: pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
     .hold { background: var(--accent); }
@@ -73,47 +72,38 @@
     .task-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .leading { display: grid; place-items: center; width: 22px; flex: 0 0 22px; }
     .task small { margin-left: auto; color: var(--muted); font-size: 10px; white-space: nowrap; }
-    .aside-note { margin: 0; padding: 14px 18px; border-top: 1px solid var(--line); font-size: 12px; }
+    .aside-note { min-height: 72px; margin: 0; padding: 14px 18px; border-top: 1px solid var(--line); font-size: 12px; }
     .notes { margin-top: 18px; font-size: 12px; }
     .notes a { text-underline-offset: 3px; }
-    @media (max-width: 640px) { .layout { grid-template-columns: minmax(0, 360px); } }
     @media (max-width: 540px) { body { padding: 22px 12px; } h1 { font-size: 23px; } th, td { padding: 12px 7px; } }
   </style>
 </head>
 <body>
   <main>
-    <h1>全套 4px，还是全套 7px？</h1>
-    <p>左右是同一批任务，只改圆点尺寸。所有状态都一起缩放，包括你选的蓝灰微实心；颜色、呼吸节奏、行高和标题位置完全一致。</p>
+    <h1>4 / 5 / 6 / 7px，一排看清。</h1>
+    <p>四列是同一批任务，所有状态统一使用该列的尺寸，包括已选的蓝灰待验收实心点。颜色、呼吸节奏、行高、标题间距都保持一致；窄窗口可以横向滚动。</p>
     <div class="toolbar">
       <button id="theme" type="button" aria-pressed="false">切换深色</button>
       <button id="motion" type="button" aria-pressed="false">关闭呼吸动效</button>
       <button id="density" type="button" aria-pressed="false">看更多待验收任务</button>
     </div>
     <p class="hint" id="hint" role="status"></p>
-    <div class="layout">
-      <section class="panel size-4" aria-labelledby="four-heading">
-        <div class="panel-heading"><h2 id="four-heading">4px · 全部状态一起缩小</h2><p>运行、等后台、待验收、失败、空心环都是 4px。</p></div>
-        <div class="tasks" id="tasks-4"></div>
-        <p class="aside-note">实心点 4px；空心环 4px / 1px 环线。行首仍保留同样的 22px 槽位。</p>
-      </section>
-      <section class="panel size-7" aria-labelledby="seven-heading">
-        <div class="panel-heading"><h2 id="seven-heading">7px · 全部状态统一大尺寸</h2><p>同样的颜色与形状，蓝灰待验收也放大到 7px。</p></div>
-        <div class="tasks" id="tasks-7"></div>
-        <p class="aside-note">实心点 7px；空心环 7px / 1.5px 环线。标题、间距和行高不变。</p>
-      </section>
+    <div class="comparison-scroll" tabindex="0" role="region" aria-label="4、5、6、7px 四列尺寸对照，可横向滚动">
+      <div class="layout" id="comparisons"></div>
     </div>
     <details class="panel palette-panel">
-      <summary>展开完整图例：每种状态的 4px / 7px，以及各自 4 倍放大</summary>
+      <summary>展开完整图例：每种状态的 4 / 5 / 6 / 7px，以及各自 4 倍放大</summary>
       <div class="table-scroll">
         <table>
-          <thead><tr><th scope="col">状态</th><th scope="col">4px</th><th scope="col">7px</th><th scope="col">4px 放大</th><th scope="col">7px 放大</th><th scope="col">颜色</th><th scope="col">动效</th></tr></thead>
+          <thead><tr id="palette-heading"></tr></thead>
           <tbody id="palette"></tbody>
         </table>
       </div>
     </details>
-    <p class="notes">呼吸点标的是基础直径，动画缩放比例仍与正式界面相同；4px 空心环适配为 1px 环线，避免糊成实心。<br>待验收都用已选的蓝灰实心，旧圆环仅保留在展开图例中作参照。仅更新独立 demo，正式界面和真实任务未修改。<a href="index.html">返回五种圆点方案</a></p>
+    <p class="notes">尺寸均为真实 CSS 像素；呼吸点标的是基础直径，动画缩放比例不变。空心环按尺寸适配环线，具体粗细见各列底部。<br>待验收都用已选的蓝灰实心，旧圆环仅保留在展开图例中作参照。仅更新独立 demo，正式界面和真实任务未修改。<a href="index.html">返回五种圆点方案</a></p>
   </main>
   <script>
+    const sizes = [{ diameter: 4, ring: 1 }, { diameter: 5, ring: 1 }, { diameter: 6, ring: 1.25 }, { diameter: 7, ring: 1.5 }];
     const statuses = [
       { name: "运行中 / 审查中", mark: "run", color: "accent", tone: "靛蓝", motion: "呼吸" },
       { name: "等后台 / 跑验收检查", mark: "hold", color: "accent", tone: "靛蓝", motion: "静止" },
@@ -145,8 +135,28 @@
       if (text) node.textContent = text;
       return node;
     }
+    function applySize(node, size) {
+      node.style.setProperty("--dot-size", `${size.diameter}px`);
+      node.style.setProperty("--ring-width", `${size.ring}px`);
+    }
+    function renderComparisons() {
+      document.getElementById("comparisons").replaceChildren(...sizes.map(size => {
+        const panel = make("section", "panel");
+        applySize(panel, size);
+        panel.setAttribute("aria-labelledby", `heading-${size.diameter}`);
+        const header = make("div", "panel-heading");
+        const heading = make("h2", "", `${size.diameter}px · 全部状态`);
+        heading.id = `heading-${size.diameter}`;
+        header.append(heading, make("p", "", `实心点、空心环、待验收统一 ${size.diameter}px。`));
+        const tasks = make("div", "tasks");
+        tasks.id = `tasks-${size.diameter}`;
+        panel.append(header, tasks, make("p", "aside-note", `直径 ${size.diameter}px · 环线 ${size.ring}px。相同的 22px 槽位、32px 行高。`));
+        return panel;
+      }));
+    }
     function specimen(mark, size, zoomed = false) {
-      const stage = make("span", `sample size-${size}`);
+      const stage = make("span", "sample");
+      applySize(stage, size);
       stage.setAttribute("aria-hidden", "true");
       if (mark) {
         const dot = make("span", `dot ${mark}`);
@@ -157,11 +167,19 @@
     }
     function renderPalette() {
       const colors = getComputedStyle(document.documentElement);
+      const headings = ["状态", ...sizes.map(size => `${size.diameter}px`), ...sizes.map(size => `${size.diameter}px 放大`), "颜色", "动效"];
+      document.getElementById("palette-heading").replaceChildren(...headings.map(text => {
+        const heading = make("th", "", text);
+        heading.scope = "col";
+        return heading;
+      }));
       document.getElementById("palette").replaceChildren(...statuses.map(status => {
         const row = make("tr", status.mark === "micro" ? "candidate" : "");
         row.append(make("td", "", status.name));
-        for (const [size, zoomed] of [[4, false], [7, false], [4, true], [7, true]]) {
-          const cell = make("td"); cell.append(specimen(status.mark, size, zoomed)); row.append(cell);
+        for (const zoomed of [false, true]) {
+          for (const size of sizes) {
+            const cell = make("td"); cell.append(specimen(status.mark, size, zoomed)); row.append(cell);
+          }
         }
         const color = make("td", "", status.tone);
         if (status.color) color.append(make("div", "color-code", colors.getPropertyValue(`--${status.color}`).trim()));
@@ -180,8 +198,8 @@
     }
     function renderTasks() {
       const rows = dense ? [...taskRows, ...extraTitles.map(title => ["micro", title, "待验收"])] : taskRows;
-      for (const size of [4, 7]) {
-        document.getElementById(`tasks-${size}`).replaceChildren(...rows.map(([mark, title, label]) => {
+      for (const size of sizes) {
+        document.getElementById(`tasks-${size.diameter}`).replaceChildren(...rows.map(([mark, title, label]) => {
           const row = make("div", "task");
           const leading = make("span", "leading");
           if (mark) leading.append(make("span", `dot ${mark}`));
@@ -206,6 +224,7 @@
       renderTasks();
     };
     reducedPreference.addEventListener("change", event => { if (!motionChosen) { motionOff = event.matches; updateMotion(); } });
+    renderComparisons();
     renderTasks();
     updateMotion();
   </script>
