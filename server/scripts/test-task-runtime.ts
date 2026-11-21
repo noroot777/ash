@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import { NAVI_HEADERS } from "@navi/shared/http-headers";
 import type { BrowserObservation, ComputerUseTarget } from "@navi/shared/task-runtime";
 import { releaseTmpDb } from "./tmp-db.js";
+import { checkComputerPreviewLayout } from "./task-runtime-computer-ui.js";
 
 const root = mkdtempSync(join(tmpdir(), "navi-task-runtime-"));
 process.env.NAVI_DB = join(root, "ash.db");
@@ -213,7 +214,9 @@ try {
           const context = canvas.getContext("2d");
           let tick = 0;
           timers.set(message.id, window.setInterval(() => {
-            context.fillStyle = "#17233b"; context.fillRect(0, 0, 640, 400);
+            const size = host.previewSize || { width: 640, height: 400 };
+            canvas.width = size.width; canvas.height = size.height;
+            context.fillStyle = "#17233b"; context.fillRect(0, 0, canvas.width, canvas.height);
             context.fillStyle = "#6fe1bd"; context.fillRect((tick++ * 13) % 560, 150, 80, 80);
             window.dispatchEvent(new CustomEvent("navi:computer-preview", { detail: { id: message.id, state: "frame", image: canvas.toDataURL("image/jpeg") } }));
           }, 80));
@@ -300,6 +303,14 @@ try {
     assert.equal(activations.length, beforeClick + 1);
     assert.deepEqual(activations.at(-1), computerTarget);
     assert.equal(await page.getByRole("dialog").count(), 0);
+    await checkComputerPreviewLayout(page, screenshots, () => {
+      appendSessionTrace("runtime", "computer-session", computerTurn, { kind: "attachment", path: "/data/uploads/runtime-computer.png", computer: "cua_repl.js", computerTarget: { ...computerTarget, windowTitle: "另一个窗口" } });
+    }, () => {
+      clearTurnActive("computer-session", computerTurn);
+      computerTurn = new Date(Date.parse(computerTurn) + 1).toISOString();
+      showComputer();
+    });
+    assert.equal(activations.length, beforeClick + 1);
     await tab("服务").click();
     await page.getByRole("region", { name: "服务日志" }).getByText(/node service.cjs/).waitFor();
     assert.ok(await page.getByRole("link", { name: "打开", exact: true }).count());

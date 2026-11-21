@@ -1,35 +1,44 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { CaretDown, CaretUp, Desktop } from "@phosphor-icons/react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { CaretDown, CaretUp, Desktop, X } from "@phosphor-icons/react";
 import type { ComputerUseFrame } from "@navi/shared/task-runtime";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
+import { useDismissable } from "../lib/useDismissable.ts";
 import type { TaskRuntime } from "./useTaskRuntime.ts";
 import { runtimeApi } from "./runtimeApi.ts";
 import { useComputerLivePreview } from "./useComputerLivePreview.ts";
 import "./runtime-activity-preview.css";
 
-function PreviewCard({ identity, label, icon, children }: {
-  identity: string; label: string; icon: ReactNode; children: ReactNode;
+function PreviewCard({ identity, aspectRatio, children }: {
+  identity: string; aspectRatio: number; children: ReactNode;
 }) {
   const key = `navi:activity-preview:${identity}`;
-  const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem(key) === "collapsed"; } catch { return false; }
+  const [visibility, setVisibility] = useState(() => {
+    try { return localStorage.getItem(key) || "open"; } catch { return "open"; }
   });
-  const toggle = () => {
-    setCollapsed(!collapsed);
-    try { localStorage.setItem(key, collapsed ? "open" : "collapsed"); } catch {}
+  const containerRef = useRef<HTMLElement>(null);
+  const collapsed = visibility === "collapsed";
+  const changeVisibility = (next: string) => {
+    setVisibility(next);
+    try { localStorage.setItem(key, next); } catch {}
   };
-  return <aside className={`runtime-activity-preview${collapsed ? " is-collapsed" : ""}`} aria-label={label}>
-    <header>{icon}<span>{label}</span>
-      <button type="button" aria-label={collapsed ? "展开操作预览" : "收起操作预览"} aria-expanded={!collapsed} onClick={toggle}>
+  useDismissable({ enabled: visibility !== "closed", containerRef, onClose: () => changeVisibility("closed"), closeOnOutside: false });
+  if (visibility === "closed") return null;
+  return <aside ref={containerRef} className={`runtime-activity-preview${collapsed ? " is-collapsed" : ""}`} aria-label="电脑操作"
+    style={{ "--preview-aspect-ratio": aspectRatio } as CSSProperties}>
+    <header>{collapsed && <><Desktop size={14} aria-hidden="true" /><span>电脑操作</span></>}
+      <button type="button" aria-label={collapsed ? "展开操作预览" : "收起操作预览"} aria-expanded={!collapsed} onClick={() => changeVisibility(collapsed ? "open" : "collapsed")}>
         {collapsed ? <CaretDown size={14} aria-hidden="true" /> : <CaretUp size={14} aria-hidden="true" />}
       </button>
+      <button type="button" aria-label="关闭操作预览" onClick={() => changeVisibility("closed")}><X size={14} aria-hidden="true" /></button>
     </header>
     {!collapsed && children}
   </aside>;
 }
 
-function ComputerSurface({ taskId, frame, onEnded }: { taskId: string; frame: ComputerUseFrame; onEnded: () => void }) {
+function ComputerSurface({ taskId, frame, onEnded, onAspectRatio }: {
+  taskId: string; frame: ComputerUseFrame; onEnded: () => void; onAspectRatio: (ratio: number) => void;
+}) {
   const live = useComputerLivePreview(taskId, frame);
   const tip = useHoverTip({ placement: "left" });
   const [failed, setFailed] = useState("");
@@ -48,7 +57,8 @@ function ComputerSurface({ taskId, frame, onEnded }: { taskId: string; frame: Co
         void runtimeApi.activateComputer(taskId, frame).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
           .finally(() => setActivating(false));
       }}>
-      <img src={live.source || image.url} alt={live.source ? "电脑操作实时画面" : "电脑操作的最近截图"} onError={() => setFailed(frame.path)} />
+      <img src={live.source || image.url} alt={live.source ? "电脑操作实时画面" : "电脑操作的最近截图"} onError={() => setFailed(frame.path)}
+        onLoad={({ currentTarget }) => { if (currentTarget.naturalHeight) onAspectRatio(currentTarget.naturalWidth / currentTarget.naturalHeight); }} />
     </button>
     <HoverTip at={tip.at}>{frame.target ? `切到${frame.target.name}` : "未取得目标应用，无法切换"}</HoverTip>
     {!live.source && failed === frame.path && <p role="alert">截图暂时无法加载</p>}
@@ -62,14 +72,15 @@ function ComputerSurface({ taskId, frame, onEnded }: { taskId: string; frame: Co
 
 function ComputerPreview({ taskId, frame }: { taskId: string; frame: ComputerUseFrame }) {
   const [ended, setEnded] = useState(false);
+  const [aspectRatio, setAspectRatio] = useState(1.6);
   const onEnded = useCallback(() => setEnded(true), []);
   if (ended) return null;
-  return <PreviewCard identity={`${taskId}:${frame.sessionId}:${frame.turnStartedAt}`} label="电脑操作" icon={<Desktop size={14} aria-hidden="true" />}>
-    <ComputerSurface taskId={taskId} frame={frame} onEnded={onEnded} />
+  return <PreviewCard identity={`${taskId}:${frame.sessionId}:${frame.turnStartedAt}`} aspectRatio={aspectRatio}>
+    <ComputerSurface key={`${frame.target?.application}:${frame.target?.windowTitle}`} taskId={taskId} frame={frame} onEnded={onEnded} onAspectRatio={setAspectRatio} />
   </PreviewCard>;
 }
 
 export function RuntimeActivityPreview({ runtime }: { runtime: TaskRuntime }) {
   const { computer } = runtime.state;
-  return computer ? <ComputerPreview key={`${runtime.taskId}:${computer.sessionId}:${computer.turnStartedAt}:${computer.target?.application}:${computer.target?.windowTitle}`} taskId={runtime.taskId} frame={computer} /> : null;
+  return computer ? <ComputerPreview key={`${runtime.taskId}:${computer.sessionId}:${computer.turnStartedAt}`} taskId={runtime.taskId} frame={computer} /> : null;
 }
