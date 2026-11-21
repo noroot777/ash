@@ -119,6 +119,7 @@ server.listen(Number(process.env.PORT),'127.0.0.1');`);
 import {appendFileSync,existsSync,readdirSync,writeFileSync} from 'node:fs';
 const options=${JSON.stringify(options)}, data=${JSON.stringify(data)}, runtime=${JSON.stringify(previous)};
 const event=value=>appendFileSync(${JSON.stringify(events)},JSON.stringify(value)+'\\n');
+let probes=0,handovers=0;
 const server=createServer((request,response)=>{
   const url=new URL(request.url,'http://localhost');
   const requested=existsSync(${JSON.stringify(requestMarker)}),confirmed=existsSync(${JSON.stringify(confirmMarker)});
@@ -132,15 +133,25 @@ const server=createServer((request,response)=>{
       desktop:true,windowPort:45678}}));return;
   }
   if(url.pathname==='/api/restart-impact'){
+    probes++;
     event({impact:true,instance:request.headers['x-ash-instance'],protocol:url.searchParams.get('protocol'),schema:url.searchParams.get('schema')});
     response.writeHead(options.impactFailure?500:200);
-    const impact=options.clearImpact?
-      {survives:[],resumes:[],interrupted:[],mcpDisrupted:[],runtimeHandover:{blocked:[],sessions:[]}}:${JSON.stringify(impact)};
+    const impact=options.clearImpact||options.clearAfter&&probes>=options.clearAfter?
+      {survives:options.clearAfter?[{id:'live',title:'仍在运行的任务',pid:process.pid}]:[],resumes:[],interrupted:[],mcpDisrupted:[],runtimeHandover:{blocked:[],sessions:[]}}:${JSON.stringify(impact)};
     if(url.searchParams.has('schema')&&!options.omitTarget)impact.runtimeHandover.target={
       protocol:1,schema:options.targetMismatch?'wrong-target':url.searchParams.get('schema')};
     response.end(JSON.stringify(options.impactFailure?{error:'cannot classify'}:impact));return;
   }
-  if(request.url==='/api/runtime-handover')event({handoff:request.method});
+  if(request.url==='/api/runtime-handover'){
+    let body='';request.on('data',chunk=>body+=chunk);request.on('end',()=>{
+      const message=JSON.parse(body);event({handoff:request.method,...message});
+      if(options.acceptHandover){
+        if(!message.check&&!message.release&&++handovers<=(options.handoverFailures||0)){response.writeHead(409);response.end('{}');return}
+        response.end(JSON.stringify(message.check?{valid:true}:message.release?{released:true}:{protocol:1,lease:'safe-lease'}));return;
+      }
+      response.writeHead(409);response.end('{}');
+    });return;
+  }
   response.writeHead(409);response.end('blocked');
 });
 process.on('SIGTERM',()=>{event({signal:true,maintenance:existsSync(data+'/.mac-maintenance.json')});if(!options.stubborn)process.exit(0)});
@@ -160,7 +171,7 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
           cwd: directory, timeout: 45_000,
           env: { ...environment, HOME: directory, NAVI_DATA_DIR: data, NAVI_MAC_RUNTIME: bundled,
             NAVI_MAC_WINDOW_PORT: "45678", NAVI_URL: `http://127.0.0.1:${port}`,
-            ANSWERS: "recover,recover", REQUEST_MARKER: requestMarker, CONFIRM_MARKER: confirmMarker, ...extra },
+            ANSWERS: "recover,recover", MANUAL_SWITCH: "1", REQUEST_MARKER: requestMarker, CONFIRM_MARKER: confirmMarker, ...extra },
         }, status);
         return result.stdout;
       };
@@ -188,6 +199,31 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
       ...["NaviConfig", "NaviHealth", "DatabaseBackup", "LegacyIdentity", "LoginService", "RestartImpact",
         "BundleRuntimeUse", "RuntimeRecovery", "ServerControl", "ServerLauncher", "ServerStartLock", "UpdateGate"].map((name) => join(mac, `Sources/${name}.swift`)),
       join(mac, "Tests/Recovery/main.swift"), "-o", binary], { cwd: root });
+
+    for (const options of [{}, { impactFailure: true }, { omitTarget: true }]) {
+      await scenario(options, async ({ run, pid, recorded, backupFiles }) => {
+        const output = await run(2, { MANUAL_SWITCH: "0", AUTO_SWITCH: "1", VERIFY_HANDOVER_WAIT: "1", ANSWERS: "" });
+        assert.match(output, /HANDOVER_WAIT/);
+        assert.doesNotMatch(output, /PROMPT|REPORT|HOLD /);
+        assert.equal(isPidAlive(pid), true);
+        assert.equal(recorded().some((event) => event.signal || event.handoff), false);
+        assert.ok(recorded().filter((event) => event.impact).length > 1);
+        assert.deepEqual(backupFiles(), []);
+      });
+    }
+    console.log("✓ automatic handover waits silently on busy or unverified service without touching tasks, maintenance or backups");
+
+    for (const options of [{ clearAfter: 3 }, { clearImpact: true, handoverFailures: 1 }]) {
+      await scenario({ ...options, acceptHandover: true }, async ({ run, pid, recorded, backupFiles }) => {
+        const output = await run(0, { MANUAL_SWITCH: "0", AUTO_SWITCH: "1", WAIT_FOR_SWITCH: "1", ANSWERS: "" });
+        assert.doesNotMatch(output, /PROMPT|REPORT|PHASE blocked/);
+        assert.equal(isPidAlive(pid), false);
+        assert.equal(recorded().filter((event) => event.signal).length, 1);
+        assert.equal(recorded().filter((event) => event.handoff && event.schema).length, options.handoverFailures ? 2 : 1);
+        assert.equal(backupFiles().length, 2);
+      });
+    }
+    console.log("✓ a ready takeover window and an acquisition race both complete automatically without waiting for the surviving task to finish");
 
     for (const answers of ["cancel", "wait", "recover,cancel"]) {
       await scenario({}, async ({ run, pid, data, recorded, backupFiles }) => {
@@ -273,7 +309,7 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
     console.log("✓ unrecognized services and changed instance, code ownership or identity never receive a shutdown signal");
 
     await scenario({}, async ({ run, pid }) => {
-      assert.match(await run(0, { RECONSIDER: "1", ANSWERS: "wait,recover,recover" }), /MENU 切换新版服务…/);
+      assert.match(await run(0, { RECONSIDER: "1", ANSWERS: "wait,recover,recover" }), /MENU 等待安全切换新版服务…/);
       assert.equal(isPidAlive(pid), false);
     });
     console.log("✓ the pending-service menu reopens recovery after choosing to wait");
@@ -334,12 +370,12 @@ server.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(ready)},JSON.stri
     console.log("✓ concurrent Sparkle and quit requests run their own package checks instead of inheriting force consent");
 
     await scenario({ clearImpact: true }, async ({ run, pid, recorded }) => {
-      const output = await run(0, { RECONSIDER: "1", VERIFY_BLOCKED_PAUSE: "1" });
+      const output = await run(0, { RECONSIDER: "1", VERIFY_HANDOVER_WAIT: "1", MANUAL_SWITCH: "0" });
       assert.match(output, /打断任务并切换服务/);
-      assert.match(output, /BLOCKED_PAUSE/);
-      assert.match(output, /MENU 重试切换新版服务/);
+      assert.match(output, /HANDOVER_WAIT/);
+      assert.match(output, /MENU 等待安全切换新版服务/);
       assert.equal(isPidAlive(pid), false);
-      assert.equal(recorded().filter((event) => event.handoff).length, 1);
+      assert.ok(recorded().filter((event) => event.handoff).length > 1);
       const impacts = recorded().filter((event) => event.impact);
       assert.ok(impacts.some((event) => event.protocol === "1" && event.schema));
       assert.equal(impacts.at(-1).schema, null);

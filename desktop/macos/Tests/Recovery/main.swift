@@ -6,7 +6,7 @@ var answers = (environment["ANSWERS"] ?? "").split(separator: ",").map(String.in
 let gate = UpdateGate.shared
 gate.shutdownTimeout = 0.4
 gate.lockTimeout = 0.4
-gate.pollInterval = environment["VERIFY_BLOCKED_PAUSE"] == "1" ? 0.05 : 60
+gate.pollInterval = environment["VERIFY_HANDOVER_WAIT"] == "1" || environment["AUTO_SWITCH"] == "1" ? 0.05 : 60
 var proceeded = false
 var reported = false
 var promptCount = 0
@@ -157,14 +157,23 @@ case "quit": gate.requestForQuit(version: "next", whenDrained: {}) { proceeded =
 default: gate.request(.staleServer(from: "previous")) { proceeded = true }
 }
 let deadline = Date().addingTimeInterval(35)
-while !proceeded && !reported && gate.phase != .waiting && Date() < deadline {
+while !proceeded && !reported && (gate.phase != .waiting || environment["WAIT_FOR_SWITCH"] == "1") && Date() < deadline {
   RunLoop.main.run(until: Date().addingTimeInterval(0.02))
 }
-if environment["VERIFY_BLOCKED_PAUSE"] == "1" {
-  precondition(gate.phase == .blocked && !proceeded && !gate.isHolding)
+if environment["VERIFY_HANDOVER_WAIT"] == "1" {
+  precondition(gate.phase == .waiting && !proceeded && !gate.isHolding)
   RunLoop.main.run(until: Date().addingTimeInterval(0.2))
-  precondition(gate.phase == .blocked && !proceeded && !gate.isHolding)
-  emit("BLOCKED_PAUSE")
+  while gate.phase != .waiting && !proceeded && !reported && Date() < deadline {
+    RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+  }
+  precondition(gate.phase == .waiting && !proceeded && !gate.isHolding && promptCount == 0 && !reported)
+  emit("HANDOVER_WAIT")
+}
+if environment["MANUAL_SWITCH"] == "1", gate.phase == .waiting && promptCount == 0 {
+  gate.reconsider()
+  while !proceeded && !reported && gate.phase != .waiting && Date() < deadline {
+    RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+  }
 }
 if environment["RECONSIDER"] == "1", gate.phase == .waiting || gate.phase == .blocked {
   emit("MENU \(gate.pendingMenuTitle)")
