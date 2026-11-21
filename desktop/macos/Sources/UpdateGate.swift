@@ -71,7 +71,7 @@ final class UpdateGate {
 
   var pendingMenuTitle: String {
     if phase == .blocked { return "重试切换新版服务…" }
-    if case .staleServer = purpose { return "切换新版服务…" }
+    if case .staleServer = purpose { return phase == .waiting ? "等待安全切换新版服务…" : "切换新版服务…" }
     return phase == .waiting ? "等任务跑完后安装更新…" : "安装更新…"
   }
 
@@ -111,7 +111,7 @@ final class UpdateGate {
   func reconsider() {
     guard hasPending, phase == .waiting || phase == .idle || phase == .blocked else { return }
     stopPolling()
-    evaluate()
+    evaluate(allowPrompt: true)
   }
 
   func pauseAfterRecovery(from version: String, reason: String) {
@@ -166,7 +166,7 @@ final class UpdateGate {
 
   // MARK: 内部
 
-  private func evaluate() {
+  private func evaluate(allowPrompt: Bool = false) {
     phase = .checking
     epoch += 1
     let mine = epoch
@@ -197,6 +197,10 @@ final class UpdateGate {
         verdict = .disrupts(target, [(title: "旧服务", why: handoverBlock)])
       } else { verdict = assessed }
       guard verdict.needsConsent else { prepare(verdict.target); return }
+      if preservingRuntime && !allowPrompt && !quitting {
+        startWaiting()
+        return
+      }
       let choice = ask(prompt(for: verdict, quitting: quitting))
       // 弹窗开着的时候 Sparkle 可能已经放弃了这次更新。
       guard mine == epoch else { return }
@@ -272,7 +276,8 @@ final class UpdateGate {
   /// 只有**确认**没人会被打断才自己放行；确认不了（服务一时没答复、答的不像 navi……）就接着等。
   private func startWaiting() {
     phase = .waiting
-    log("等会被打断的任务跑完，每 \(Int(pollInterval)) 秒再问一次")
+    log(preservingRuntime ? "旧服务继续运行，每 \(Int(pollInterval)) 秒检查安全接管窗口"
+      : "等会被打断的任务跑完，每 \(Int(pollInterval)) 秒再问一次")
     stopPolling()
     let mine = epoch
     pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
@@ -422,11 +427,9 @@ final class UpdateGate {
       log("没停服务：\(why)。重新评估")
       if preservingRuntime {
         handoverBlock = why
-        stopPolling()
-        phase = .blocked
+        startWaiting()
         releaseHold()
         answerQuit(false)
-        report("\(why)。旧服务继续运行，自动切换已暂停；请从菜单重试切换新版服务。")
       } else { releaseHold(); evaluate() }
     case .failed(let reason):
       fail(reason)
@@ -501,7 +504,7 @@ final class UpdateGate {
     if quitting { lines.append("退出 Navi 时 Sparkle 会把下好的新版装上。") }
     switch verdict {
     case .disrupts(_, let items):
-      lines.append("会打断 \(items.count) 个任务：")
+      lines.append(preservingRuntime ? "暂不能无损切换服务：" : "会打断 \(items.count) 个任务：")
       lines += items.prefix(8).map { "· \($0.title) —— \($0.why)" }
       if items.count > 8 { lines.append("……还有 \(items.count - 8) 个") }
     case .unknown(let why):
@@ -513,7 +516,7 @@ final class UpdateGate {
     var buttons = [waitTitle, nowTitle]
     var choices: [Choice] = [.wait, .now]
     if case .staleServer = purpose, preservingRuntime {
-      buttons = [waitTitle]
+      buttons = ["就绪后自动切换"]
       choices = [.wait]
       if !quitting {
         buttons.append("强制切换服务…")
