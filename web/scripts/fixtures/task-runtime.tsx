@@ -5,7 +5,7 @@ import { InspectorHost, surfaceTabWhenUsed, type InspectorDescriptor } from "../
 import { useTaskRuntime, type TaskRuntime } from "../../src/task-runtime/useTaskRuntime.ts";
 import { ServiceInspector } from "../../src/task-runtime/ServiceInspector.tsx";
 import { BrowserInspector } from "../../src/task-runtime/TaskBrowserPane.tsx";
-import { RuntimeAutoOpen } from "../../src/task-runtime/RuntimeAutoOpen.tsx";
+import { RuntimeActivityPreview } from "../../src/task-runtime/RuntimeActivityPreview.tsx";
 import "../../src/styles/global.css";
 
 // 测试用 `?running=1` 模拟任务正在执行（服务端此时拒绝用户重启）。
@@ -29,7 +29,7 @@ function Fixture() {
     "browser", !!browser || runtime.serviceReady, () => ({ dot: browser?.status === "ready" ? "run" : browser ? "has" : null }),
   ), [service, browser, runtime.serviceReady]);
   return <InspectorHost contextKey={`task:${taskId}`} descriptors={descriptors} context={runtime}>
-    {({ openTab }) => <main style={{ display: "flex", flex: 1, minWidth: 0, flexDirection: "column", color: "var(--ink)", background: "var(--panel)" }}>
+    {({ openTab, activeTabId }) => <main style={{ position: "relative", display: "flex", flex: 1, minWidth: 0, flexDirection: "column", color: "var(--ink)", background: "var(--panel)" }}>
       <header style={{ padding: "14px 20px", borderBottom: "0.5px solid var(--line)", fontSize: 14 }}>额度控制台 · 浏览器验证
         <button type="button" style={{ marginLeft: 12 }} onClick={() => setTaskId(taskId === "runtime" ? "other" : "runtime")}>切换任务</button></header>
       <section style={{ flex: 1, padding: "32px", overflow: "auto" }} aria-label="任务会话">
@@ -38,7 +38,7 @@ function Fixture() {
         <p style={{ color: "var(--muted)", lineHeight: 1.9 }}>我已启动任务工作区的服务。接下来核对输入、保存与手机布局。</p>
       </section>
       <div style={{ padding: "16px 20px" }}><textarea aria-label="回复任务" placeholder="继续这个任务…" style={{ width: "100%", resize: "none", padding: 12, border: "1px solid var(--line)", borderRadius: 12 }} /></div>
-      <RuntimeAutoOpen taskId={taskId} browser={browser} openTab={openTab} />
+      <RuntimeActivityPreview runtime={runtime} activeTabId={activeTabId} openTab={openTab} />
     </main>}
   </InspectorHost>;
 }

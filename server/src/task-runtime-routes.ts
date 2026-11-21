@@ -9,6 +9,7 @@ import { developmentService, startDevelopmentService, stopDevelopmentService } f
 import { refreshBrowserFrame, taskBrowserAction, taskBrowserState } from "./task-browser.js";
 import { browserFrame } from "./task-browser-store.js";
 import { runtimeCaller } from "./task-runtime-auth.js";
+import { computerUseFrame } from "./computer-preview.js";
 
 const errorBody = (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) });
 
@@ -17,7 +18,7 @@ export function mountTaskRuntimeRoutes(api: Hono): void {
     const taskId = c.req.param("id");
     await requireTaskAccess(actorOf(c), taskId);
     c.header("cache-control", "no-store");
-    return c.json({ service: developmentService(taskId), browser: taskBrowserState(taskId) });
+    return c.json({ service: developmentService(taskId), browser: taskBrowserState(taskId), computer: computerUseFrame(taskId) });
   });
   api.post("/tasks/:id/runtime/service", async (c) => {
     const taskId = c.req.param("id");

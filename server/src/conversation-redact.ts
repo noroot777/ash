@@ -47,6 +47,7 @@ import { activeTalkOf } from "./talk/segments.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { parseSessionTrace, sessionTracePath, sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { now } from "./util.js";
+import { clearComputerFrame } from "./computer-preview.js";
 
 /**
  * 正文里的一段（序号 + 指纹），或一段只有执行过程的 trace：老记录按时间段指名（trace），带身份的按
@@ -321,6 +322,7 @@ export async function deleteConversationSegments(sessionId: string, targets: rea
         // 正文没换成，用户看到的就还是原样，重试时按同样的指名再来一遍。
         if (redacted && redacted.text !== raw) syncBackgroundCopies(copies, redacted.text);
         if (traceNext !== null && traceNext !== traceRaw) replaceFileAtomically(tracePath, traceNext);
+        clearComputerFrame(task.id, sessionId);
         if (redacted && redacted.text !== raw) replaceFileAtomically(mdPath, redacted.text);
       } catch (error) {
         console.warn(`[navi] 删除消息写盘失败 session=${sessionId}:`, error);

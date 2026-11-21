@@ -4,6 +4,7 @@ import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent } from "@navi/shared";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { toolImageEvents } from "./computer-images.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages } from "./markdown-image-stream.js";
 import {
@@ -275,8 +276,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       const text = [...(item.summary ?? []), ...(item.content ?? [])].join("\n");
       if (seenReasoningDeltas.has(item.id)) push({ kind: "thinking", text: "\n\n" });
       else if (text) push({ kind: "thinking", text: `${text}\n\n` });
-    } else if (item?.type === "mcpToolCall") {
-      for (const path of persistToolResultImages(item.result ?? item.error, seenImages)) push({ kind: "attachment", path });
+    } else if (item?.type === "mcpToolCall" || item?.type === "dynamicToolCall") {
+      for (const image of toolImageEvents(item.result ?? item.contentItems ?? item.error, seenImages, item.server ? `${item.server}.${item.tool}` : item.tool)) push(image);
     } else if (item?.type === "imageGeneration") {
       for (const path of persistToolResultImages(item.result, seenImages, { allowBareBase64: true })) push({ kind: "attachment", path });
       if (typeof item.savedPath === "string") push({ kind: "attachment", path: item.savedPath });
@@ -379,8 +380,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只收
         // 工具结果里那几张 base64 截图 —— 它们不是正文语法,按 item 交代就是对的。
         if (item?.type !== "agentMessage") {
-          const results = persistToolResultImages(item?.result ?? item?.contentItems ?? item?.error, seen, { allowBareBase64: item?.type === "imageGeneration" });
-          for (const path of results) push(childActivity(p.threadId, { kind: "attachment", path }));
+          const results = toolImageEvents(item?.result ?? item?.contentItems ?? item?.error, seen, item?.server ? `${item.server}.${item.tool}` : item?.tool ?? "", item?.type === "imageGeneration");
+          for (const image of results) push(childActivity(p.threadId, image));
         }
         if (item?.type === "imageGeneration" && typeof item.savedPath === "string") push(childActivity(p.threadId, { kind: "attachment", path: item.savedPath }));
       }

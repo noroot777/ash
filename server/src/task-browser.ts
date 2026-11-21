@@ -131,7 +131,7 @@ export async function taskBrowserAction(taskId: string, input: BrowserUserAction
         const size = browserViewport(input.width ?? 1280, input.height ?? 800);
         live = { gen: record.gen, base: record.url, prefix: "", touched: Date.now(), controlVersion: 0, browser: null, page: null,
           state: { id: randomUUID(), status: "starting", control: "agent", url: record.url,
-            title: "", ...size, revision: 0, updatedAt: now(), hasFrame: false, error: null, activity: [] } };
+            title: "", ...size, display: { mode: input.width !== undefined || input.height !== undefined ? "scaled" : "responsive", ...size }, revision: 0, updatedAt: now(), hasFrame: false, error: null, activity: [] } };
         browsers.set(taskId, live);
         publish(taskId, live);
         try {
@@ -181,9 +181,9 @@ export async function taskBrowserAction(taskId: string, input: BrowserUserAction
     if (input.action !== "open" && options.id !== live.state.id) throw new Error("浏览器会话已更换，请刷新后使用当前 id");
     if (options.agent && controlVersion !== undefined && live.controlVersion !== controlVersion) throw new Error("用户接管已取消排队中的操作，请重新 snapshot 后再操作");
     if (readAnyPreview(taskId)?.gen !== live.gen) { await closeLive(taskId, live, "托管服务已停止或替换"); throw new Error("服务已停止，浏览器已关闭"); }
-    if (options.agent && (input.action === "release" || input.action === "pointer" || input.action === "type")) throw new Error("此操作只对用户开放；智能体请使用 snapshot 返回的 ref");
+    if (options.agent && (input.action === "release" || input.action === "pointer" || input.action === "type" || input.action === "viewport")) throw new Error("此操作只对用户开放；智能体请使用 snapshot 返回的 ref");
     if (options.agent && live.state.control === "user" && input.action !== "snapshot") throw new Error("用户已接管此页面，等待用户交还后再操作");
-    if (!options.agent && !["snapshot", "takeover", "release", "close", "open"].includes(input.action) && live.state.control !== "user") throw new Error("请先接管浏览器，避免和智能体同时操作");
+    if (!options.agent && !["snapshot", "takeover", "release", "close", "open", "viewport"].includes(input.action) && live.state.control !== "user") throw new Error("请先接管浏览器，避免和智能体同时操作");
     if (input.action === "release") live.state.control = "agent";
     if (input.action === "close") {
       await closeLive(taskId, live, "浏览器已关闭，服务继续运行");
@@ -191,6 +191,15 @@ export async function taskBrowserAction(taskId: string, input: BrowserUserAction
     }
     try {
       await operateBrowserPage(live.page, input, live.base, live.prefix);
+      if (input.action === "viewport") {
+        live.state.display = { ...(live.state.display ?? { width: live.state.width, height: live.state.height }), mode: input.mode };
+        live.state.error = null;
+        live.touched = Date.now();
+        await capture(taskId, live);
+        publish(taskId, live);
+        return { state: live.state, text: "", targets: [] };
+      }
+      if (input.action === "resize") live.state.display = { mode: "scaled", width: input.width, height: input.height };
       live.touched = Date.now();
       live.state.error = null;
       activity(live, input.action);

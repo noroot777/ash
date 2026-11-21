@@ -13,7 +13,8 @@ import { ClaudeWriteLedger, soleReceipt } from "./tool-writes.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import { spawnAgent, spawnErrorMessage, forceFinishOnExit, killChild } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
-import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { imageStore, type ImageStore } from "../agent-attachments.js";
+import { ComputerToolImages } from "./computer-images.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { ClaudeControlBridge } from "./claude-control.js";
@@ -122,6 +123,7 @@ async function* claudeStreamEvents(
   let contextUsed = 0;
   let contextModel: string | null = null;
   const seenImages: ImageStore = imageStore();
+  const computerImages = new ComputerToolImages();
   // 写文件调用要等结果没报错才算写过（见 tool-writes.ts），主会话与子智能体共用这一本。
   const writeLedger = new ClaudeWriteLedger(cwd);
   const childImages = new Map<string, ImageStore>();
@@ -228,7 +230,7 @@ async function* claudeStreamEvents(
         // 注意这个分支**会提前 return**，所以必须在这儿接，不能指望下面那段顶层处理。
         if (block.type === "tool_use" && !replaying) claudeMonitors.toolUse(block.name, block.input, block.id);
         if (block.type === "tool_result" && !replaying) claudeMonitors.toolResult(block.tool_use_id, block.content);
-        if (block.type === "tool_use") background.toolUse(block.name, block.id, block.input);
+        if (block.type === "tool_use") { background.toolUse(block.name, block.id, block.input); computerImages.call(block); }
         if (block.type === "tool_result") background.toolResult(block.tool_use_id, block.is_error === true);
         // 子智能体写的文件同样是这个任务写的（见 tool-writes.ts）。
         if (block.type === "tool_use") writeLedger.toolUse(block.name, block.input, block.id);
@@ -242,7 +244,7 @@ async function* claudeStreamEvents(
         // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只
         // 收工具结果里那几张 base64 截图 —— 它们不是正文语法,按块交代就是对的。
         if (block.type === "tool_result" && !replaying) {
-          for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
+          for (const image of computerImages.result(block, images)) push(childActivity(ev.parent_tool_use_id, image));
         }
       }
       return;
@@ -385,6 +387,7 @@ async function* claudeStreamEvents(
           // 才分得清「内置 Monitor」和「普通后台 Bash」。
           if (!replaying) claudeMonitors.toolUse(block.name, block.input, block.id);
           background.toolUse(block.name, block.id, block.input);
+          computerImages.call(block);
           // 交计划、提问由权限闸换成计划卡 / 答题卡，这一步本身不再画成一次（被拒的）工具调用。
           if (resident?.planGate && PLAN_HANDOFF_TOOLS.has(block.name)) continue;
           push(nativeWork.call(block.name, block.input, block.id)
@@ -406,7 +409,7 @@ async function* claudeStreamEvents(
         if (activity) push(activity);
         const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true, soleReceipt(ev));
         if (writes) push(writes);
-        if (!replaying) for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
+        if (!replaying) for (const image of computerImages.result(block, seenImages)) push(image);
       }
     } else if (ev.type === "result") {
       // **不是每一条 `result` 都是「本回合说完了」。** claude CLI resume 时会先替

@@ -45,16 +45,18 @@
 .task-browser-size button { width: 26px; height: 24px; }
 .task-browser-size button[aria-pressed="true"] { background: var(--panel); color: var(--ink); box-shadow: var(--surface-shadow); opacity: 1; }
 .task-browser-viewport {
-  display: flex; min-height: 120px; flex: 1 1 auto; align-items: flex-start; justify-content: center; overflow: auto;
+  display: flex; min-height: 0; flex: 1 1 auto; align-items: flex-start; justify-content: center; overflow: hidden;
   padding: 18px; scrollbar-width: thin;
 }
 .task-browser-viewport:focus-visible { outline: none; }
 .task-browser-viewport img {
-  display: block; width: 100%; height: auto; border-radius: var(--r-md); background: var(--panel);
+  display: block; width: auto; max-width: 100%; height: auto; max-height: 100%; object-fit: contain; border-radius: var(--r-md); background: var(--panel);
   box-shadow: 0 0 0 0.5px var(--line2), 0 12px 32px -18px lch(0 0 0 / .35);
   transition: box-shadow var(--dur-2) var(--ease-out);
 }
 .task-browser-viewport.is-mobile img { width: min(100%, 390px); border-radius: 18px; }
+.task-browser-viewport.is-responsive { padding: 0; }
+.task-browser-viewport.is-responsive img { border-radius: 0; box-shadow: none; }
 .task-browser-pane.is-controlled .task-browser-viewport img { cursor: crosshair; box-shadow: 0 0 0 2px var(--ink), 0 12px 32px -18px lch(0 0 0 / .35); }
 .task-browser-empty { margin: auto; color: var(--faint); font-size: var(--t-xs); }
 .task-browser-input { display: flex; flex: none; align-items: center; gap: 6px; padding: 8px 10px; border-top: 0.5px solid var(--line); background: var(--panel); }
@@ -64,11 +66,13 @@
   height: 30px; padding: 0 12px; border: 0; border-radius: var(--r-md); background: var(--action); color: var(--on-action); font-size: var(--t-xs); font-weight: var(--w-medium);
 }
 .task-browser-input button:not([type]):disabled { background: var(--action); color: var(--on-action-dim); opacity: 1; }
-.task-browser-footer { display: flex; flex: none; align-items: center; gap: 4px; min-height: 34px; padding: 0 8px 0 14px; border-top: 0.5px solid var(--line); color: var(--faint); font-size: 11px; }
+.task-browser-footer { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 34px; padding: 0 8px 0 14px; border-top: 0.5px solid var(--line); color: var(--faint); font-size: 11px; }
 .task-browser-footer > span:first-child { margin-right: 6px; font-variant-numeric: tabular-nums; }
 .task-browser-footer button { height: 24px; padding: 0 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); font-size: 11px; }
 .task-browser-footer button:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
 .task-browser-footer button[aria-expanded="true"] { color: var(--ink); }
+.task-browser-display { display: flex; flex: none; padding: 2px; border-radius: var(--r-sm); background: var(--raised); }
+.task-browser-display button[aria-pressed="true"] { background: var(--panel); color: var(--ink); box-shadow: var(--surface-shadow); }
 .task-browser-gap { flex: 1; }
 .task-browser-activity { flex: none; max-height: 180px; margin: 0; overflow: auto; padding: 6px 14px; border-top: 0.5px solid var(--line); list-style: none; font-size: 11px; scrollbar-width: thin; }
 .task-browser-activity li { display: flex; flex-wrap: wrap; gap: 10px; padding: 3px 0; color: var(--muted); }

@@ -20,6 +20,7 @@ import {
   type RunTracePaths,
 } from "./diagnostics.js";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { toolImageEvents } from "./computer-images.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { codexNaviMcpArgs } from "./navi-mcp-inject.js";
@@ -405,7 +406,7 @@ async function* codexStreamEvents(
         if (writes) push(writes);
       }
       else if (it.type === "mcp_tool_call") {
-        for (const path of persistToolResultImages(it.result, seenImages)) push({ kind: "attachment", path });
+        for (const image of toolImageEvents(it.result, seenImages, `${it.server}.${it.tool}`)) push(image);
       }
       else if (it.type === "image_generation_call") {
         for (const path of persistToolResultImages(it.result, seenImages, { allowBareBase64: true })) push({ kind: "attachment", path });
