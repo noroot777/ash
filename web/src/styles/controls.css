@@ -325,8 +325,8 @@ header:hover .task-pin,
 }
 
 .ui-status-dot {
-  width: 7px;
-  height: 7px;
+  width: var(--status-dot-size);
+  height: var(--status-dot-size);
   border-radius: 50%;
   background: var(--line2);
 }

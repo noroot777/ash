@@ -118,6 +118,7 @@
   --color-muted: lch(39.176% 1.25 282);
   --color-faint: lch(64.64% 1.25 282);
   --color-accent: #5e6ad2;
+  --color-task-unaccepted: #858aa8;
   --color-accent-soft: lch(92.5% 12 286);
   --color-green: #168466;
   --color-green-soft: #e3f4ed;
@@ -141,6 +142,9 @@
   --muted: var(--color-muted);
   --faint: var(--color-faint);
   --accent: var(--color-accent);
+  --task-unaccepted: var(--color-task-unaccepted);
+  --status-dot-size: 6px;
+  --status-dot-ring-width: 1.25px;
   --accent-soft: var(--color-accent-soft);
   --green: var(--color-green);
   --green-bg: var(--color-green-soft);
@@ -227,6 +231,7 @@
   --color-muted: lch(67% 3 282);
   --color-faint: lch(48% 3 282);
   --color-accent: #7480e0;
+  --color-task-unaccepted: #a0a6c5;
   --color-accent-soft: lch(24% 20 286);
   --color-green: #3fba8c;
   --color-green-soft: lch(20% 12 165);
