@@ -67,11 +67,12 @@ const onCancel = new Map<string, () => void>();
  * 说「这个任务正在起预览」的那句话 —— 已经取消掉的一代继续算在里面，用户就会在收到
  * 「已取消」之后刷新出一颗「关闭预览」，再点一次还照样回一句「停到了」。
  */
-export function cancelDriving(taskId: string, exceptGen: string | null, preserveDevelopment = false): number {
+export function cancelDriving(taskId: string, exceptGen: string | null, options: { preserveDevelopment?: boolean; purpose?: "development" } = {}): number {
   const gens = starting.get(taskId);
   let marked = 0;
   for (const gen of [...(gens ?? [])]) {
-    if (gen === exceptGen || (preserveDevelopment && purposes.get(gen) === "development")) continue;
+    if (gen === exceptGen || (options.preserveDevelopment && purposes.get(gen) === "development")
+      || (options.purpose && purposes.get(gen) !== options.purpose)) continue;
     canceledGens.add(gen);
     gens?.delete(gen);
     // 登记方的收口（放掉动作锁之类）在这儿当场做掉，不等那一趟自己回来。

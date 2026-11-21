@@ -114,7 +114,7 @@ export function useFreeWorkflowActions({ task, notify, returnFocusRef }: {
   // 预览那颗**不**跟着 waiting 走：后端起预览这一路压根没有提问/续跑门禁（对着一个停在
   // 检查点的任务开预览没有任何危险，工作区没人在动），跟着锁死只会让用户在最想照着页面
   // 回答审查者提问的那一刻点不动按钮。它只认「有没有一个会改代码的回合在飞」。
-  const previewBlocked = taskBusy && !reviewTurn;
+  const previewBlocked = taskBusy && !reviewTurn && !free.state?.preview.running && action !== "opening";
   // 审查中带上「第几轮 / 最多几轮」：点它改的正是后面那个数。
   const reviewLabel = reviewing
     ? `审查中 ${reviewing.currentRound}/${reviewing.retryLimit + 1}`
