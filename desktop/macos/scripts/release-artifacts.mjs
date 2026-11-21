@@ -3,8 +3,16 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { timed } from "./timing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+export function copyApp(source, destination) {
+  return timed("app.copy", () => {
+    const result = spawnSync("/bin/cp", ["-cRp", source, destination], { encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`复制 app 失败（${result.status ?? result.signal}）：${result.stderr}`);
+  });
+}
 
 export function appInfo(app) {
   const plist = join(app, "Contents", "Info.plist");
@@ -33,7 +41,7 @@ export function packApp(app, artifacts, name, say = console.log) {
   mkdirSync(artifacts, { recursive: true });
   const dmg = join(artifacts, name);
   const source = `${dmg}.source`;
-  const digest = appDigest(app);
+  const digest = timed("app.digest", () => appDigest(app), say);
   if (existsSync(dmg)) {
     const packed = existsSync(source) ? readFileSync(source, "utf8").trim() : "（没有记录）";
     if (packed !== digest) {
@@ -44,8 +52,10 @@ export function packApp(app, artifacts, name, say = console.log) {
   } else {
     say(`▶ 封 ${dmg}`);
     const part = join(artifacts, `.part-${basename(dmg)}`);
-    const result = spawnSync("bash", [join(HERE, "make-dmg.sh"), app, part], { stdio: "inherit" });
-    if (result.status !== 0) throw new Error(`封 dmg 失败（${result.status ?? result.signal}）`);
+    timed("dmg.pack", () => {
+      const result = spawnSync("bash", [join(HERE, "make-dmg.sh"), app, part], { stdio: "inherit" });
+      if (result.status !== 0) throw new Error(`封 dmg 失败（${result.status ?? result.signal}）`);
+    }, say);
     writeFileSync(source, `${digest}\n`);
     renameSync(part, dmg);
   }

@@ -6,6 +6,15 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderAppcast, renderItem } from "../desktop/macos/scripts/appcast.mjs";
 import { buildBundle, prepareWorkflow, restoreBundle, verifyBundle, withSigningKey, workflowRequest } from "../desktop/macos/scripts/cloud-workflow.mjs";
+import { timed } from "../desktop/macos/scripts/timing.mjs";
+
+const timings = [];
+const sentinel = {};
+assert.equal(timed("fixture.success", () => sentinel, (line) => timings.push(line)), sentinel);
+const failure = new Error("fixture failed");
+assert.throws(() => timed("fixture.failure", () => { throw failure; }, (line) => timings.push(line)), (error) => error === failure);
+assert.match(timings[0], /^\[mac-timing\] fixture\.success: \d+\.\d{3}s status=ok$/);
+assert.match(timings[1], /^\[mac-timing\] fixture\.failure: \d+\.\d{3}s status=failed$/);
 
 if (process.platform !== "darwin") {
   console.log("SKIP: macOS cloud artifact regression");
@@ -101,6 +110,9 @@ try {
   assert.equal(manifest.tag, "navi-mac-v0.3.2");
   assert.equal(readlinkSync(join(directory, "payload/Navi.app/Contents/Resources/alias")), "data");
   assert.ok(statSync(join(directory, "payload/Navi.app/Contents/MacOS/Navi")).mode & 0o111);
+  writeFileSync(join(app, "Contents/Resources/data"), "changed after snapshot");
+  assert.equal(readFileSync(join(directory, "payload/Navi.app/Contents/Resources/data"), "utf8"), "immutable resource", "copy-on-write snapshots never share writable file contents");
+  writeFileSync(join(app, "Contents/Resources/data"), "immutable resource");
   const first = verifyBundle(directory, request);
   assert.ok(first.dmg.endsWith("/navi-mac-v0.3.2/Navi-0.3.2.dmg"));
   const original = readFileSync(first.dmg);
@@ -202,6 +214,16 @@ try {
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /retention-days: 1/);
   assert.match(workflow, /node-version: '26\.13\.1'\n          package-manager-cache: false/);
+  const cache = workflow.match(/      - name: Cache verified downloads[^\n]*\n([\s\S]*?)(?=      - name:)/)?.[1];
+  assert.ok(cache, "fresh native builds cache downloads");
+  assert.match(cache, /if: steps\.request\.outputs\.restore != 'true'/);
+  assert.match(cache, /continue-on-error: true/);
+  assert.match(cache, /uses: actions\/cache@[a-f0-9]{40}/);
+  const cachePaths = cache.match(/          path: \|\n([\s\S]*?)          key:/)?.[1].trim().split("\n").map((line) => line.trim());
+  assert.deepEqual(cachePaths, ["~/.npm/_cacache", "desktop/macos/build/cache/*.tar.xz"], "no app, dmg, extracted executable, node_modules, key, credential or log enters the download cache");
+  assert.match(cache, /key: mac-downloads-v1-\$\{\{ runner.os \}\}-\$\{\{ matrix.architecture \}\}-\$\{\{ hashFiles\('package-lock.json', 'desktop\/macos\/scripts\/architecture.mjs', 'desktop\/macos\/scripts\/sparkle.mjs'\) \}\}/);
+  assert.match(cache, /restore-keys: \|\n            mac-downloads-v1-\$\{\{ runner.os \}\}-\$\{\{ matrix.architecture \}\}-\n/);
+  assert.match(buildJob, /run: npm ci --prefer-offline --no-audit --no-fund/);
   for (const block of workflow.matchAll(/        run: \|\n((?:          .*(?:\n|$))*)/g)) {
     assert.doesNotMatch(block[1], /package-manager-cache:/);
     const shell = spawnSync("bash", ["-n"], { input: block[1], encoding: "utf8" });
@@ -209,7 +231,7 @@ try {
   }
   assert.doesNotMatch(workflow, /^\s+(push|pull_request|pull_request_target):/m);
   assert.ok(workflow.indexOf("Save original distribution") < workflow.indexOf("MAC_SPARKLE_PRIVATE_KEY: ${{ secrets."));
-  assert.equal([...workflow.matchAll(/uses: actions\/[^@]+@([a-f0-9]{40})/g)].length, 9);
+  assert.equal([...workflow.matchAll(/uses: actions\/[^@]+@([a-f0-9]{40})/g)].length, 10);
   console.log("PASS: signing key is private, excluded from child environment/artifacts, and cleaned on failure; workflow pins actions and saves recovery before injecting secrets");
 } finally {
   rmSync(temporary, { recursive: true, force: true });

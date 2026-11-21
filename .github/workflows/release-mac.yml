@@ -82,9 +82,20 @@ jobs:
       - name: Unpack and verify recovery artifact
         if: steps.request.outputs.restore == 'true'
         run: node desktop/macos/scripts/cloud-workflow.mjs restore
+      - name: Cache verified downloads without app bundles or credentials
+        if: steps.request.outputs.restore != 'true'
+        continue-on-error: true
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.npm/_cacache
+            desktop/macos/build/cache/*.tar.xz
+          key: mac-downloads-v1-${{ runner.os }}-${{ matrix.architecture }}-${{ hashFiles('package-lock.json', 'desktop/macos/scripts/architecture.mjs', 'desktop/macos/scripts/sparkle.mjs') }}
+          restore-keys: |
+            mac-downloads-v1-${{ runner.os }}-${{ matrix.architecture }}-
       - name: Install build dependencies without release credentials
         if: steps.request.outputs.restore != 'true'
-        run: npm ci
+        run: npm ci --prefer-offline --no-audit --no-fund
       - name: Build app and seal original dmg
         if: steps.request.outputs.restore != 'true'
         run: node desktop/macos/scripts/cloud-workflow.mjs build
